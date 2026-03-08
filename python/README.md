@@ -1,0 +1,297 @@
+# ai-cost-calc (Python)
+
+AI cost calculator and usage tracker for LLM apps.
+
+- Powered by MarginDash live pricing, fetched at runtime (not bundled static pricing files)
+- AI API prices change often; this SDK fetches live pricing from the API instead of relying on bundled static tables
+- Privacy-first: your app still talks directly to AI providers, so prompts/responses stay in your stack
+- Tracking is optional and sends usage plus event metadata (customer ID, event type, revenue if provided)
+
+Use it in two ways:
+- Free cost calculator (`cost`) for 400+ models (no API key required):
+  - exact mode with token counts (`input_tokens`, `output_tokens`)
+  - estimate mode with prompt/response text (`input_text`, `output_text`)
+  - live pricing with 24h cache per `AiCostCalc` instance
+- Usage tracking (`add_usage` + `track`) with an API key
+
+## Pricing Data
+
+Cost calculation uses live pricing from the API.
+No hardcoded pricing tables.
+
+- Pricing data is cached per `AiCostCalc` instance for 24 hours
+- Cache refresh happens automatically when the cache is stale
+- If a refresh fails after a successful fetch, the SDK reuses last-known pricing and retries after backoff
+
+## Caching Behavior
+
+- Cache scope: per `AiCostCalc` instance
+- Cache TTL: 24 hours
+- Refresh failures: last-known pricing is reused, then retried after backoff
+- Force refresh now: create a new `AiCostCalc` instance
+
+## Requirements
+
+- Python 3.10+
+
+## Installation
+
+```bash
+pip install ai-cost-calc
+```
+
+For the tracking quickstart (OpenAI example):
+
+```bash
+pip install openai
+```
+
+For text-based estimation with `tiktoken`:
+
+```bash
+pip install ai-cost-calc[estimate]
+```
+
+## Quickstart (Cost Calculator)
+
+```python
+from ai_cost_calc import AiCostCalc
+
+md = AiCostCalc()
+
+result = md.cost("gpt-4o", input_tokens=1000, output_tokens=500)
+if result:
+    print(result.total_cost)
+```
+
+## Quickstart (Usage Tracking)
+
+Use an API key from your MarginDash dashboard.
+
+```python
+from openai import OpenAI
+from ai_cost_calc import AiCostCalc
+
+openai = OpenAI(api_key="YOUR_OPENAI_KEY")
+md = AiCostCalc(api_key="YOUR_API_KEY")
+
+response = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+
+md.add_usage(
+    vendor="openai",
+    model=response.model,
+    input_tokens=(response.usage.prompt_tokens if response.usage else 0),
+    output_tokens=(response.usage.completion_tokens if response.usage else 0),
+)
+
+md.track(
+    customer_id="cust_123",
+    event_type="chat",
+    revenue_amount_in_cents=250,
+)
+
+md.shutdown()
+```
+
+## When to Use Which Mode
+
+| If you need... | Use... |
+| --- | --- |
+| Quick cost checks with no account setup | `cost()` only |
+| Exact costs from provider token usage | `cost(model, input_tokens, output_tokens)` |
+| Early estimation from prompt/response text | `cost(model, input_text, output_text)` |
+| MarginDash customer/revenue tracking | `add_usage()` + `track()` with `api_key` |
+
+## Return Values and Failure Modes
+
+| Method | Failure behavior |
+| --- | --- |
+| `cost()` | Returns `None` |
+| `add_usage()` / `track()` without `api_key` | No-op, reports via `on_error` once |
+| `flush()` / `shutdown()` | Do not raise for request failures; report via `on_error` |
+
+## Common Integration Patterns
+
+OpenAI (`chat.completions`):
+
+```python
+md.add_usage(
+    vendor="openai",
+    model=response.model,
+    input_tokens=(response.usage.prompt_tokens if response.usage else 0),
+    output_tokens=(response.usage.completion_tokens if response.usage else 0),
+)
+```
+
+Anthropic (`messages`):
+
+```python
+md.add_usage(
+    vendor="anthropic",
+    model=response.model,
+    input_tokens=(response.usage.input_tokens if response.usage else 0),
+    output_tokens=(response.usage.output_tokens if response.usage else 0),
+)
+```
+
+Google Gemini:
+
+```python
+usage = response.get("usageMetadata", {})
+md.add_usage(
+    vendor="google",
+    model=response.get("modelVersion", "gemini-2.0-flash"),
+    input_tokens=usage.get("promptTokenCount", 0),
+    output_tokens=usage.get("candidatesTokenCount", 0),
+)
+```
+
+## Environment Variables
+
+Recommended pattern:
+
+```python
+import os
+from ai_cost_calc import AiCostCalc
+
+md = AiCostCalc(api_key=os.getenv("AI_COST_CALC_API_KEY"))
+```
+
+Common env vars:
+- `AI_COST_CALC_API_KEY`: required only for tracking (from your MarginDash dashboard)
+- `OPENAI_API_KEY`: only needed if you use OpenAI SDK in your app
+
+## API Reference
+
+### `cost(model, *, input_tokens, output_tokens)`
+
+Exact cost mode.
+
+- `model`: model slug (example: `gpt-4o`, `claude-sonnet-4`)
+- `input_tokens`: non-negative integer
+- `output_tokens`: non-negative integer
+
+### `cost(model, *, input_text, output_text=None)`
+
+Estimated cost mode using `tiktoken`.
+
+- `input_text`: prompt text
+- `output_text`: optional response text (defaults to 0 output tokens)
+
+Returns `CostResult | None`.
+
+`None` means one of:
+- unknown model
+- pricing fetch unavailable
+- invalid arguments
+- tokenizer unavailable/failure in estimate mode
+
+`CostResult` fields:
+- `model`
+- `input_cost`
+- `output_cost`
+- `total_cost`
+- `input_tokens`
+- `output_tokens`
+- `estimated`
+
+### `add_usage(*, vendor, model, input_tokens, output_tokens)`
+
+Buffers usage from one AI call. Requires `api_key` in constructor.
+
+### `track(*, customer_id, revenue_amount_in_cents=None, event_type=None, unique_request_token=None, occurred_at=None)`
+
+Creates an event from all currently buffered usage entries and enqueues it for delivery.
+Requires `api_key`.
+
+### `flush()`
+
+Immediately sends queued events.
+
+### `shutdown()`
+
+Stops background flushing thread and sends remaining events.
+Call this before application exit.
+
+## Configuration
+
+```python
+from ai_cost_calc import AiCostCalc
+
+md = AiCostCalc(
+    api_key="md_live_...",                     # optional for cost(); required for tracking
+    base_url="https://margindash.com/api/v1",
+    flush_interval=5.0,
+    max_retries=3,
+    default_event_type="ai_request",
+    on_error=lambda err: print(err.message),
+)
+```
+
+Options:
+- `api_key` (optional)
+- `base_url` (default `https://margindash.com/api/v1`)
+- `flush_interval` seconds (default `5.0`, must be a finite number `> 0` when `api_key` is set)
+- `max_retries` (default `3`, must be a non-negative integer)
+- `default_event_type` (default `ai_request`)
+- `on_error` (optional callback)
+
+## Error Handling
+
+The SDK avoids raising for typical operational failures in cost/tracking flows.
+Use `on_error` for observability.
+
+```python
+from ai_cost_calc import AiCostCalc
+
+md = AiCostCalc(api_key="md_live_...", on_error=lambda err: print(err.message))
+```
+
+## Delivery Semantics
+
+Tracking behavior:
+- in-memory queue size limit: 1000 events (oldest dropped when full)
+- pending usage limit before `track`: 1000 items (oldest dropped when full)
+- batch size: 50 events/request
+- retries on connection/timeouts, HTTP `429`, and `5xx` with exponential backoff
+
+Idempotency:
+- `unique_request_token` is the idempotency key for an event
+- if omitted, SDK auto-generates a UUID
+- for retry-safe exactly-once behavior across your own retries, provide your own stable token
+
+## Privacy
+
+Free cost mode only fetches pricing data.
+If tracking is enabled, the SDK sends event metadata (for example: customer ID, event type, revenue), plus model/vendor and token counts.
+Request/response content is not sent.
+
+## Troubleshooting
+
+- `cost()` returns `None`:
+  - verify model slug
+  - check network access to the pricing API
+  - wire `on_error` callback for details
+- numbers look outdated:
+  - pricing cache TTL is 24 hours per `AiCostCalc` instance
+  - create a new `AiCostCalc` instance for an immediate refresh if needed
+- text estimation fails:
+  - install extras: `pip install ai-cost-calc[estimate]`
+- tracking methods appear to do nothing:
+  - confirm `api_key` is set in constructor
+- events missing on shutdown:
+  - call `md.shutdown()` before app exits
+
+## Versioning and Releases
+
+This SDK follows semantic versioning.
+
+- PyPI package: `ai-cost-calc`
+- check release history on PyPI/GitHub before major upgrades
+
+## License
+
+MIT

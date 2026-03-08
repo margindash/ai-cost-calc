@@ -1,0 +1,54 @@
+{
+  "name": "ai-cost-calc",
+  "version": "1.3.5",
+  "description": "AI cost calculator and usage tracker. Calculate LLM API costs for 400+ models (OpenAI, Anthropic, Google). No API key required for cost lookups.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "tsx --test tests/client.test.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "ai-cost",
+    "llm-cost",
+    "llm-pricing",
+    "token-cost",
+    "openai-cost",
+    "openai-pricing",
+    "anthropic-pricing",
+    "ai-usage",
+    "cost-tracker",
+    "cost-calculator",
+    "model-pricing",
+    "token-pricing",
+    "ai-billing",
+    "llm-usage",
+    "api-cost"
+  ],
+  "license": "MIT",
+  "optionalDependencies": {
+    "js-tiktoken": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.0"
+  }
+}
