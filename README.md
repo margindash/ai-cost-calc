@@ -14,6 +14,9 @@ AI cost calculator and usage tracker for LLM apps.
 
 Powered by MarginDash live pricing.
 
+The `model` passed to `cost(...)` must match a `slug` from:
+https://margindash.com/api/v1/models
+
 ## Who This Is For
 
 Teams building AI features that need accurate cost visibility without proxying prompts.

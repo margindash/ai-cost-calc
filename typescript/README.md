@@ -2,9 +2,6 @@
 
 AI cost calculator and usage tracker for LLM apps.
 
-Source repository: https://github.com/margindash/ai-cost-calc
-Issues: https://github.com/margindash/ai-cost-calc/issues
-
 - Powered by MarginDash live pricing, fetched at runtime (not bundled static pricing files)
 - AI API prices change often; this SDK fetches live pricing from the API instead of relying on bundled static tables
 - Privacy-first: your app still talks directly to AI providers, so prompts/responses stay in your stack
@@ -19,8 +16,7 @@ Use it in two ways:
 
 ## Pricing Data
 
-Cost calculation uses live pricing from the API.
-No hardcoded pricing tables.
+The `model` passed to `cost(...)` must match a `slug` from: https://margindash.com/api/v1/models
 
 - Pricing data is cached per `AiCostCalc` instance for 24 hours
 - Cache refresh happens automatically when the cache is stale

@@ -14,7 +14,7 @@ const DEFAULT_EVENT_TYPE = "ai_request";
 const MAX_QUEUE_SIZE = 1_000;
 const BATCH_SIZE = 50;
 const MAX_PENDING_USAGES = 1_000;
-const SDK_VERSION = "1.3.5";
+const SDK_VERSION = "1.3.6";
 const HTTP_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
 
