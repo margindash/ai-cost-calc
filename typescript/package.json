@@ -42,6 +42,14 @@
     "api-cost"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/margindash/ai-cost-calc.git"
+  },
+  "homepage": "https://github.com/margindash/ai-cost-calc#readme",
+  "bugs": {
+    "url": "https://github.com/margindash/ai-cost-calc/issues"
+  },
   "optionalDependencies": {
     "js-tiktoken": "^1.0.0"
   },

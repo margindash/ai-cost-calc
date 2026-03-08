@@ -32,3 +32,8 @@ classifiers = [
 [project.optional-dependencies]
 estimate = ["tiktoken>=0.7"]
 dev = ["pytest", "mypy", "types-requests"]
+
+[project.urls]
+Homepage = "https://github.com/margindash/ai-cost-calc#readme"
+Repository = "https://github.com/margindash/ai-cost-calc"
+Issues = "https://github.com/margindash/ai-cost-calc/issues"
