@@ -1,5 +1,9 @@
 # ai-cost-calc
 
+[![npm version](https://img.shields.io/npm/v/ai-cost-calc.svg)](https://www.npmjs.com/package/ai-cost-calc)
+[![PyPI version](https://img.shields.io/pypi/v/ai-cost-calc.svg)](https://pypi.org/project/ai-cost-calc/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 AI cost calculator and usage tracker for LLM apps.
 
 - Live model pricing fetched at runtime (not a bundled static pricing file)
