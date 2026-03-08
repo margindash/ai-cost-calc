@@ -6,8 +6,7 @@
 
 AI cost calculator and usage tracker for LLM apps.
 
-- Live model pricing fetched at runtime (not a bundled static pricing file)
-- Built for AI APIs where pricing changes often
+- Built for production-grade cost tracking, with pricing verification and continuous updates as model prices change.
 - Privacy-first by default: your app keeps talking directly to AI providers
 - Free cost calculator requires no API key
 - Optional tracking mode sends usage and event metadata only

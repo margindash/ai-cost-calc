@@ -2,8 +2,7 @@
 
 AI cost calculator and usage tracker for LLM apps.
 
-- Powered by MarginDash live pricing, fetched at runtime (not bundled static pricing files)
-- AI API prices change often; this SDK fetches live pricing from the API instead of relying on bundled static tables
+- Built for production-grade cost tracking, with pricing verification and continuous updates as model prices change.
 - Privacy-first: your app still talks directly to AI providers, so prompts/responses stay in your stack
 - Tracking is optional and sends usage plus event metadata (customer ID, event type, revenue if provided)
 
