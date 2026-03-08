@@ -23,28 +23,28 @@ Teams building AI features that need accurate cost visibility without proxying p
 
 ## Install
 
-JavaScript / TypeScript:
+### JavaScript / TypeScript
 
 ```bash
 npm install ai-cost-calc
 ```
 
-Python:
+Text estimation uses `js-tiktoken` (optional dependency). If your environment skips optional dependencies:
+
+```bash
+npm install js-tiktoken
+```
+
+### Python
 
 ```bash
 pip install ai-cost-calc
 ```
 
-Python text estimation (optional):
+Text estimation (optional):
 
 ```bash
 pip install ai-cost-calc[estimate]
-```
-
-JavaScript / TypeScript text estimation uses `js-tiktoken` (optional dependency). If your environment skips optional dependencies:
-
-```bash
-npm install js-tiktoken
 ```
 
 ## Quickstart: Exact Cost From Token Counts
