@@ -2,24 +2,21 @@
 
 AI cost calculator and usage tracker for LLM apps.
 
-- Powered by MarginDash live pricing fetched at runtime (not a bundled static pricing file)
-- AI API pricing changes often, so costs stay accurate without manual table updates
-- Privacy-first: your app talks directly to AI providers; prompts and responses stay in your stack
-- Free cost calculator mode needs no API key; tracking mode is optional
+- Live model pricing fetched at runtime (not a bundled static pricing file)
+- Built for AI APIs where pricing changes often
+- Privacy-first by default: your app keeps talking directly to AI providers
+- Free cost calculator requires no API key
+- Optional tracking mode sends usage and event metadata only
 
-## Packages
+Powered by MarginDash live pricing.
 
-- npm (JavaScript/TypeScript): https://www.npmjs.com/package/ai-cost-calc
-- PyPI (Python): https://pypi.org/project/ai-cost-calc/
+## Who This Is For
 
-## SDKs
+Teams building AI features that need accurate cost visibility without proxying prompts.
 
-- [TypeScript SDK](./typescript/README.md)
-- [Python SDK](./python/README.md)
+## Install
 
-## Quick Start
-
-TypeScript:
+JavaScript / TypeScript:
 
 ```bash
 npm install ai-cost-calc
@@ -31,12 +28,130 @@ Python:
 pip install ai-cost-calc
 ```
 
-## Which Mode to Use
+Python text estimation (optional):
 
-- Free cost calculator: call `cost(...)` with exact token counts or prompt/response text
-- Usage tracking: use `addUsage`/`track` (TypeScript) or `add_usage`/`track` (Python) with an API key
+```bash
+pip install ai-cost-calc[estimate]
+```
 
-## Pricing Data
+JavaScript / TypeScript text estimation uses `js-tiktoken` (optional dependency). If your environment skips optional dependencies:
 
-Cost calculation uses live pricing fetched from the API, with caching and retry behavior in each SDK.
+```bash
+npm install js-tiktoken
+```
 
+## Quickstart: Exact Cost From Token Counts
+
+JavaScript / TypeScript:
+
+```ts
+import { AiCostCalc } from "ai-cost-calc";
+
+const calc = new AiCostCalc();
+const result = await calc.cost("gpt-4o", 1000, 500);
+if (!result) return;
+console.log(result.totalCost);
+```
+
+Python:
+
+```py
+from ai_cost_calc import AiCostCalc
+
+calc = AiCostCalc()
+result = calc.cost("gpt-4o", input_tokens=1000, output_tokens=500)
+if result is None:
+    raise RuntimeError("Could not calculate cost")
+print(result.total_cost)
+```
+
+## Quickstart: Estimate Cost From Text
+
+JavaScript / TypeScript:
+
+```ts
+import { AiCostCalc } from "ai-cost-calc";
+
+const calc = new AiCostCalc();
+const result = await calc.cost("gpt-4o", "Write a release note for this PR.");
+if (!result) return;
+console.log(result.inputTokens, result.outputTokens, result.estimated);
+```
+
+Python:
+
+```py
+from ai_cost_calc import AiCostCalc
+
+calc = AiCostCalc()
+result = calc.cost("gpt-4o", input_text="Write a release note for this PR.")
+if result is None:
+    raise RuntimeError("Could not estimate cost")
+print(result.input_tokens, result.output_tokens, result.estimated)
+```
+
+## Optional Usage Tracking
+
+Use this mode when you want customer-level usage and revenue event tracking.
+
+JavaScript / TypeScript:
+
+```ts
+import { AiCostCalc } from "ai-cost-calc";
+
+const calc = new AiCostCalc({ apiKey: process.env.AI_COST_CALC_API_KEY });
+
+calc.addUsage({
+  vendor: "openai",
+  model: "gpt-4o",
+  inputTokens: 1000,
+  outputTokens: 500,
+});
+
+calc.track({ customerId: "cust_123", eventType: "chat" });
+await calc.shutdown();
+```
+
+Python:
+
+```py
+from ai_cost_calc import AiCostCalc
+
+calc = AiCostCalc(api_key="YOUR_API_KEY")
+
+calc.add_usage(
+    vendor="openai",
+    model="gpt-4o",
+    input_tokens=1000,
+    output_tokens=500,
+)
+
+calc.track(customer_id="cust_123", event_type="chat")
+calc.shutdown()
+```
+
+## Modes At A Glance
+
+| Need | Mode |
+| --- | --- |
+| Quick cost checks with no account setup | `cost(...)` |
+| Exact costs from provider token usage | token-count `cost` |
+| Early estimation from prompt/response text | text-based `cost` |
+| Customer and revenue tracking | `addUsage`/`track` (TS) or `add_usage`/`track` (Python) with `apiKey` |
+
+## How Pricing Works
+
+- Cost calculation fetches live pricing from the MarginDash API at runtime
+- Each `AiCostCalc` instance caches pricing for 24 hours
+- If a refresh fails after a successful fetch, the SDK reuses last-known pricing and retries after backoff
+
+## Privacy Model
+
+- Free cost calculator mode: no API key required, no prompt/response data sent to MarginDash
+- Tracking mode: sends usage and event metadata (model, token counts, customer/event fields)
+- Your app still calls AI providers directly; no proxy hop is added
+
+## SDK Docs
+
+- [TypeScript SDK README](./typescript/README.md)
+- [Python SDK README](./python/README.md)
