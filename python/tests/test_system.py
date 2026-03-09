@@ -4,7 +4,13 @@ import urllib.request
 
 from ai_cost_calc import AiCostCalc
 
-API_KEY = "REPLACE_WITH_ENV_VAR"
+import os
+import sys
+
+API_KEY = os.environ.get("MARGINDASH_API_KEY")
+if not API_KEY:
+    print("Set MARGINDASH_API_KEY env var to run system tests")
+    sys.exit(1)
 
 passed = 0
 failed = 0

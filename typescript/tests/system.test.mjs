@@ -1,6 +1,10 @@
 import { AiCostCalc } from "ai-cost-calc";
 
-const API_KEY = "REPLACE_WITH_ENV_VAR";
+const API_KEY = process.env.MARGINDASH_API_KEY;
+if (!API_KEY) {
+  console.error("Set MARGINDASH_API_KEY env var to run system tests");
+  process.exit(1);
+}
 let passed = 0;
 let failed = 0;
 
