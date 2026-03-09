@@ -1,6 +1,6 @@
 {
   "name": "ai-cost-calc",
-  "version": "1.3.10",
+  "version": "1.3.11",
   "description": "AI cost calculator and usage tracker. Calculate LLM API costs for 400+ models (OpenAI, Anthropic, Google). No API key required for cost lookups.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
