@@ -54,8 +54,7 @@ JavaScript / TypeScript:
 import { AiCostCalc } from "ai-cost-calc";
 
 const calc = new AiCostCalc();
-const result = await calc.cost("gpt-4o", 1000, 500);
-if (!result) return;
+const result = await calc.cost("openai/gpt-4o", 1000, 500);
 console.log(result.totalCost);
 ```
 
@@ -65,9 +64,7 @@ Python:
 from ai_cost_calc import AiCostCalc
 
 calc = AiCostCalc()
-result = calc.cost("gpt-4o", input_tokens=1000, output_tokens=500)
-if result is None:
-    raise RuntimeError("Could not calculate cost")
+result = calc.cost("openai/gpt-4o", input_tokens=1000, output_tokens=500)
 print(result.total_cost)
 ```
 
@@ -79,9 +76,12 @@ JavaScript / TypeScript:
 import { AiCostCalc } from "ai-cost-calc";
 
 const calc = new AiCostCalc();
-const result = await calc.cost("gpt-4o", "Write a release note for this PR.");
-if (!result) return;
-console.log(result.inputTokens, result.outputTokens, result.estimated);
+
+// Input text only
+const result = await calc.cost("openai/gpt-4o", "Write a release note for this PR.");
+
+// Input + output text
+const result2 = await calc.cost("openai/gpt-4o", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
 ```
 
 Python:
@@ -90,10 +90,12 @@ Python:
 from ai_cost_calc import AiCostCalc
 
 calc = AiCostCalc()
-result = calc.cost("gpt-4o", input_text="Write a release note for this PR.")
-if result is None:
-    raise RuntimeError("Could not estimate cost")
-print(result.input_tokens, result.output_tokens, result.estimated)
+
+# Input text only
+result = calc.cost("openai/gpt-4o", input_text="Write a release note for this PR.")
+
+# Input + output text
+result2 = calc.cost("openai/gpt-4o", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
 ```
 
 ## Optional Usage Tracking
@@ -108,8 +110,7 @@ import { AiCostCalc } from "ai-cost-calc";
 const calc = new AiCostCalc({ apiKey: process.env.AI_COST_CALC_API_KEY });
 
 calc.addUsage({
-  vendor: "openai",
-  model: "gpt-4o",
+  model: "openai/gpt-4o",
   inputTokens: 1000,
   outputTokens: 500,
 });
@@ -126,8 +127,7 @@ from ai_cost_calc import AiCostCalc
 calc = AiCostCalc(api_key="YOUR_API_KEY")
 
 calc.add_usage(
-    vendor="openai",
-    model="gpt-4o",
+    model="openai/gpt-4o",
     input_tokens=1000,
     output_tokens=500,
 )
@@ -148,6 +148,10 @@ calc.shutdown()
 ## How Pricing Works
 
 - Cost calculation fetches live pricing from the MarginDash API at runtime
+- SDKs read pricing from `GET /api/v1/models` using:
+  - `models[].pricing.input_per_1m_usd`
+  - `models[].pricing.output_per_1m_usd`
+- The endpoint also includes benchmark data at `models[].benchmarks.variants` (available for downstream use; not required for `cost(...)`)
 - Each `AiCostCalc` instance caches pricing for 24 hours
 - If a refresh fails after a successful fetch, the SDK reuses last-known pricing and retries after backoff
 

@@ -9,7 +9,6 @@ export interface EventPayload {
 
 /** Usage data from a single AI API call. */
 export interface UsageData {
-  vendor: string;
   model: string;
   inputTokens: number;
   outputTokens: number;

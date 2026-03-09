@@ -10,19 +10,28 @@ from ai_cost_calc import CostResult, AiCostCalc, ModelPricing
 
 
 MOCK_MODELS_RESPONSE = {
-    "vendors": [
+    "generated_at": "2026-03-09T00:00:00Z",
+    "models": [
         {
-            "vendor": "openai",
-            "models": [
-                {"slug": "gpt-4o", "name": "GPT-4o", "input_price_per_1m": 2.5, "output_price_per_1m": 10.0},
-                {"slug": "gpt-4o-mini", "name": "GPT-4o Mini", "input_price_per_1m": 0.15, "output_price_per_1m": 0.6},
-            ],
+            "slug": "gpt-4o",
+            "name": "GPT-4o",
+            "provider": "openai",
+            "pricing": {"input_per_1m_usd": 2.5, "output_per_1m_usd": 10.0, "cache_read_per_1m_usd": 1.25},
+            "benchmarks": {"variants": []},
         },
         {
-            "vendor": "anthropic",
-            "models": [
-                {"slug": "claude-sonnet-4", "name": "Claude Sonnet 4", "input_price_per_1m": 3.0, "output_price_per_1m": 15.0},
-            ],
+            "slug": "gpt-4o-mini",
+            "name": "GPT-4o Mini",
+            "provider": "openai",
+            "pricing": {"input_per_1m_usd": 0.15, "output_per_1m_usd": 0.6, "cache_read_per_1m_usd": 0.075},
+            "benchmarks": {"variants": []},
+        },
+        {
+            "slug": "claude-sonnet-4",
+            "name": "Claude Sonnet 4",
+            "provider": "anthropic",
+            "pricing": {"input_per_1m_usd": 3.0, "output_per_1m_usd": 15.0, "cache_read_per_1m_usd": None},
+            "benchmarks": {"variants": []},
         },
     ]
 }
@@ -242,13 +251,11 @@ class TestCostWithText:
 
 class TestDefensiveParsing:
     @patch("ai_cost_calc.client.requests.get")
-    def test_skips_malformed_vendor_entries(self, mock_get):
+    def test_skips_malformed_top_level_model_entries(self, mock_get):
         mock_get.return_value = _mock_response({
-            "vendors": [
+            "models": [
                 "not-a-dict",
-                {"vendor": "openai", "models": [
-                    {"slug": "gpt-4o", "input_price_per_1m": 2.5, "output_price_per_1m": 10.0},
-                ]},
+                {"slug": "gpt-4o", "pricing": {"input_per_1m_usd": 2.5, "output_per_1m_usd": 10.0}},
             ]
         })
         md = AiCostCalc()
@@ -258,16 +265,13 @@ class TestDefensiveParsing:
     @patch("ai_cost_calc.client.requests.get")
     def test_skips_malformed_model_entries(self, mock_get):
         mock_get.return_value = _mock_response({
-            "vendors": [{
-                "vendor": "openai",
-                "models": [
-                    "not-a-dict",
-                    {"slug": "gpt-4o", "input_price_per_1m": 2.5, "output_price_per_1m": 10.0},
-                    {"slug": "bad", "input_price_per_1m": "not-a-number", "output_price_per_1m": 10.0},
-                    {"slug": "nan", "input_price_per_1m": float("nan"), "output_price_per_1m": 10.0},
-                    {"slug": "", "input_price_per_1m": 1.0, "output_price_per_1m": 1.0},
-                ],
-            }],
+            "models": [
+                "not-a-dict",
+                {"slug": "gpt-4o", "pricing": {"input_per_1m_usd": 2.5, "output_per_1m_usd": 10.0}},
+                {"slug": "bad", "pricing": {"input_per_1m_usd": "not-a-number", "output_per_1m_usd": 10.0}},
+                {"slug": "nan", "pricing": {"input_per_1m_usd": float("nan"), "output_per_1m_usd": 10.0}},
+                {"slug": "", "pricing": {"input_per_1m_usd": 1.0, "output_per_1m_usd": 1.0}},
+            ],
         })
         md = AiCostCalc()
         result = md.cost("gpt-4o", input_tokens=1000, output_tokens=500)
@@ -276,7 +280,7 @@ class TestDefensiveParsing:
         assert len(md._pricing_cache) == 1
 
     @patch("ai_cost_calc.client.requests.get")
-    def test_handles_missing_vendors_key(self, mock_get):
+    def test_handles_missing_models_key(self, mock_get):
         mock_get.return_value = _mock_response({})
         md = AiCostCalc()
         result = md.cost("gpt-4o", input_tokens=1000, output_tokens=500)

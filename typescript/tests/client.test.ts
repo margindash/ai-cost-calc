@@ -3,19 +3,28 @@ import assert from "node:assert/strict";
 import { AiCostCalc } from "../src/client.js";
 
 const MOCK_MODELS_RESPONSE = {
-  vendors: [
+  generated_at: "2026-03-09T00:00:00Z",
+  models: [
     {
-      vendor: "openai",
-      models: [
-        { slug: "gpt-4o", name: "GPT-4o", input_price_per_1m: 2.5, output_price_per_1m: 10.0 },
-        { slug: "gpt-4o-mini", name: "GPT-4o Mini", input_price_per_1m: 0.15, output_price_per_1m: 0.6 },
-      ],
+      slug: "gpt-4o",
+      name: "GPT-4o",
+      provider: "openai",
+      pricing: { input_per_1m_usd: 2.5, output_per_1m_usd: 10.0, cache_read_per_1m_usd: 1.25 },
+      benchmarks: { variants: [] },
     },
     {
-      vendor: "anthropic",
-      models: [
-        { slug: "claude-sonnet-4", name: "Claude Sonnet 4", input_price_per_1m: 3.0, output_price_per_1m: 15.0 },
-      ],
+      slug: "gpt-4o-mini",
+      name: "GPT-4o Mini",
+      provider: "openai",
+      pricing: { input_per_1m_usd: 0.15, output_per_1m_usd: 0.6, cache_read_per_1m_usd: 0.075 },
+      benchmarks: { variants: [] },
+    },
+    {
+      slug: "claude-sonnet-4",
+      name: "Claude Sonnet 4",
+      provider: "anthropic",
+      pricing: { input_per_1m_usd: 3.0, output_per_1m_usd: 15.0, cache_read_per_1m_usd: null },
+      benchmarks: { variants: [] },
     },
   ],
 };
@@ -276,15 +285,13 @@ describe("Defensive parsing", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("skips malformed vendor entries", async () => {
+  it("skips malformed top-level model entries", async () => {
     globalThis.fetch = mockFetchSuccess({
-      vendors: [
+      models: [
         "not-a-dict",
         {
-          vendor: "openai",
-          models: [
-            { slug: "gpt-4o", input_price_per_1m: 2.5, output_price_per_1m: 10.0 },
-          ],
+          slug: "gpt-4o",
+          pricing: { input_per_1m_usd: 2.5, output_per_1m_usd: 10.0 },
         },
       ],
     }) as unknown as typeof fetch;
@@ -296,16 +303,13 @@ describe("Defensive parsing", () => {
 
   it("skips malformed model entries", async () => {
     globalThis.fetch = mockFetchSuccess({
-      vendors: [{
-        vendor: "openai",
-        models: [
-          "not-a-dict",
-          { slug: "gpt-4o", input_price_per_1m: 2.5, output_price_per_1m: 10.0 },
-          { slug: "bad", input_price_per_1m: "not-a-number", output_price_per_1m: 10.0 },
-          { slug: "nan", input_price_per_1m: NaN, output_price_per_1m: 10.0 },
-          { slug: "", input_price_per_1m: 1.0, output_price_per_1m: 1.0 },
-        ],
-      }],
+      models: [
+        "not-a-dict",
+        { slug: "gpt-4o", pricing: { input_per_1m_usd: 2.5, output_per_1m_usd: 10.0 } },
+        { slug: "bad", pricing: { input_per_1m_usd: "not-a-number", output_per_1m_usd: 10.0 } },
+        { slug: "nan", pricing: { input_per_1m_usd: NaN, output_per_1m_usd: 10.0 } },
+        { slug: "", pricing: { input_per_1m_usd: 1.0, output_per_1m_usd: 1.0 } },
+      ],
     }) as unknown as typeof fetch;
 
     const md = new AiCostCalc();
@@ -316,10 +320,11 @@ describe("Defensive parsing", () => {
     assert.equal((md as any).pricingCache.size, 1);
   });
 
-  it("handles missing vendors key", async () => {
+  it("handles missing models key", async () => {
     globalThis.fetch = mockFetchSuccess({}) as unknown as typeof fetch;
     const md = new AiCostCalc();
     const result = await md.cost("gpt-4o", 1000, 500);
     assert.equal(result, null);
   });
+
 });

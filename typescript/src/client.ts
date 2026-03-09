@@ -14,7 +14,7 @@ const DEFAULT_EVENT_TYPE = "ai_request";
 const MAX_QUEUE_SIZE = 1_000;
 const BATCH_SIZE = 50;
 const MAX_PENDING_USAGES = 1_000;
-const SDK_VERSION = "1.3.6";
+const SDK_VERSION = "1.3.8";
 const HTTP_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
 
@@ -263,31 +263,8 @@ export class AiCostCalc {
         });
         if (!res.ok) throw new Error(`status ${res.status}`);
 
-        const data: {
-          vendors: {
-            vendor: string;
-            models: { slug: string; input_price_per_1m: number; output_price_per_1m: number }[];
-          }[];
-        } = await res.json();
-
-        const map = new Map<string, ModelPricing>();
-        if (Array.isArray(data.vendors)) {
-          for (const vendor of data.vendors) {
-            if (typeof vendor !== "object" || vendor === null) continue;
-            if (!Array.isArray(vendor.models)) continue;
-            for (const m of vendor.models) {
-              if (typeof m !== "object" || m === null) continue;
-              const input = m.input_price_per_1m;
-              const output = m.output_price_per_1m;
-              if (!m.slug || !Number.isFinite(input) || !Number.isFinite(output)) continue;
-              map.set(m.slug, {
-                slug: m.slug,
-                inputPricePer1M: input,
-                outputPricePer1M: output,
-              });
-            }
-          }
-        }
+        const data: unknown = await res.json();
+        const map = this.buildPricingCache(data);
         this.pricingCache = map;
         this.pricingFetchedAt = Date.now();
         this.pricingFailedAt = 0;
@@ -301,6 +278,35 @@ export class AiCostCalc {
     })();
 
     return this.pricingPromise;
+  }
+
+  private buildPricingCache(data: unknown): Map<string, ModelPricing> {
+    const map = new Map<string, ModelPricing>();
+    if (typeof data !== "object" || data === null) return map;
+
+    const root = data as Record<string, unknown>;
+
+    if (!Array.isArray(root.models)) return map;
+    for (const model of root.models) {
+      if (typeof model !== "object" || model === null) continue;
+      const m = model as Record<string, unknown>;
+      const pricing = (typeof m.pricing === "object" && m.pricing !== null)
+        ? (m.pricing as Record<string, unknown>)
+        : null;
+      const slug = m.slug;
+      const input = pricing?.input_per_1m_usd;
+      const output = pricing?.output_per_1m_usd;
+      if (typeof slug !== "string" || !slug
+        || typeof input !== "number" || !Number.isFinite(input)
+        || typeof output !== "number" || !Number.isFinite(output)) continue;
+      map.set(slug, {
+        slug,
+        inputPricePer1M: input,
+        outputPricePer1M: output,
+      });
+    }
+
+    return map;
   }
 
   // ---------------------------------------------------------------------------
@@ -334,12 +340,15 @@ export class AiCostCalc {
     const wire: WireEvent = {
       customer_id: event.customerId,
       revenue_amount_in_cents: event.revenueAmountInCents ?? null,
-      vendor_responses: usages.map((u) => ({
-        vendor_name: u.vendor,
-        ai_model_name: u.model,
-        input_tokens: u.inputTokens,
-        output_tokens: u.outputTokens,
-      })),
+      vendor_responses: usages.map((u) => {
+        const slashIdx = u.model.indexOf("/");
+        return {
+          vendor_name: slashIdx > 0 ? u.model.slice(0, slashIdx) : u.model,
+          ai_model_name: u.model,
+          input_tokens: u.inputTokens,
+          output_tokens: u.outputTokens,
+        };
+      }),
       unique_request_token: event.uniqueRequestToken ?? crypto.randomUUID(),
       event_type: event.eventType ?? this.defaultEventType,
       occurred_at: event.occurredAt ?? new Date().toISOString(),

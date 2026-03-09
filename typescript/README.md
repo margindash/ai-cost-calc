@@ -17,6 +17,10 @@ Use it in two ways:
 
 The `model` passed to `cost(...)` must match a `slug` from: https://margindash.com/api/v1/models
 
+- The SDK reads pricing from:
+  - `models[].pricing.input_per_1m_usd`
+  - `models[].pricing.output_per_1m_usd`
+- The API also returns benchmark variants at `models[].benchmarks.variants` (not required for `cost()`)
 - Pricing data is cached per `AiCostCalc` instance for 24 hours
 - Cache refresh happens automatically when the cache is stale
 - If a refresh fails after a successful fetch, the SDK reuses last-known pricing and retries after backoff
@@ -58,9 +62,15 @@ import { AiCostCalc } from "ai-cost-calc";
 
 async function run() {
   const md = new AiCostCalc();
-  const result = await md.cost("gpt-4o", 1000, 500);
-  if (!result) return;
-  console.log(result.totalCost);
+
+  // Exact cost from token counts
+  const result = await md.cost("openai/gpt-4o", 1000, 500);
+
+  // Estimate from input + output text
+  const result2 = await md.cost("openai/gpt-4o", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
+
+  // Estimate from input text only (output defaults to 0 tokens)
+  const result3 = await md.cost("openai/gpt-4o", "Write a release note for this PR.");
 }
 
 run();
@@ -79,7 +89,7 @@ async function run() {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model: "openai/gpt-4o",
     messages: [{ role: "user", content: "Hello" }],
   });
 
@@ -125,7 +135,6 @@ OpenAI (`chat.completions`):
 
 ```typescript
 md.addUsage({
-  vendor: "openai",
   model: response.model,
   inputTokens: response.usage?.prompt_tokens ?? 0,
   outputTokens: response.usage?.completion_tokens ?? 0,
@@ -136,7 +145,6 @@ Anthropic (`messages`):
 
 ```typescript
 md.addUsage({
-  vendor: "anthropic",
   model: response.model,
   inputTokens: response.usage?.input_tokens ?? 0,
   outputTokens: response.usage?.output_tokens ?? 0,
@@ -147,8 +155,7 @@ Google Gemini:
 
 ```typescript
 md.addUsage({
-  vendor: "google",
-  model: response.modelVersion ?? "gemini-2.0-flash",
+  model: response.modelVersion ?? "google/gemini-2.0-flash",
   inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
   outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
 });
@@ -165,7 +172,7 @@ md.addUsage({
 
 Exact cost mode.
 
-- `model`: model slug (example: `gpt-4o`, `claude-sonnet-4`)
+- `model`: model slug (example: `openai/gpt-4o`, `anthropic/claude-sonnet-4`)
 - `inputTokens`: non-negative integer
 - `outputTokens`: non-negative integer
 
@@ -193,7 +200,7 @@ Returns `Promise<CostResult | null>`.
 - `outputTokens`
 - `estimated`
 
-### `addUsage({ vendor, model, inputTokens, outputTokens })`
+### `addUsage({ model, inputTokens, outputTokens })`
 
 Buffers usage from one AI call. Requires `apiKey` in constructor.
 
@@ -267,7 +274,7 @@ Idempotency:
 ## Privacy
 
 Free cost mode only fetches pricing data.
-If tracking is enabled, the SDK sends event metadata (for example: customer ID, event type, revenue), plus model/vendor and token counts.
+If tracking is enabled, the SDK sends event metadata (for example: customer ID, event type, revenue), plus model and token counts.
 Request/response content is not sent.
 
 ## Troubleshooting

@@ -43,7 +43,7 @@ class AiCostCalc:
 
         # Paid — full tracking with API key
         md = AiCostCalc(api_key="md_live_...")
-        md.add_usage(vendor="openai", model="gpt-4o", input_tokens=1200, output_tokens=340)
+        md.add_usage(model="openai/gpt-4o", input_tokens=1200, output_tokens=340)
         md.track(customer_id="cust_123")
         md.shutdown()
     """
@@ -218,17 +218,19 @@ class AiCostCalc:
             return None
 
     def add_usage(
-        self, *, vendor: str, model: str, input_tokens: int, output_tokens: int
+        self, *, model: str, input_tokens: int, output_tokens: int
     ) -> None:
         """Record usage from a single AI API call."""
         if not self._require_api_key("add_usage"):
             return
+        slash_idx = model.find("/")
+        vendor_name = model[:slash_idx] if slash_idx > 0 else model
         with self._lock:
             if len(self._pending_usages) >= _MAX_PENDING_USAGES:
                 self._pending_usages.pop(0)
                 logger.warning("pending usages limit reached, dropping oldest")
             self._pending_usages.append({
-                "vendor_name": vendor,
+                "vendor_name": vendor_name,
                 "ai_model_name": model,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -333,27 +335,7 @@ class AiCostCalc:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-
-                cache: dict[str, ModelPricing] = {}
-                vendors = data.get("vendors", [])
-                if isinstance(vendors, list):
-                    for vendor in vendors:
-                        if not isinstance(vendor, dict):
-                            continue
-                        models = vendor.get("models", [])
-                        if not isinstance(models, list):
-                            continue
-                        for m in models:
-                            if not isinstance(m, dict):
-                                continue
-                            slug = m.get("slug")
-                            inp = m.get("input_price_per_1m")
-                            out = m.get("output_price_per_1m")
-                            if not slug or not isinstance(inp, (int, float)) or not isinstance(out, (int, float)):
-                                continue
-                            if not math.isfinite(inp) or not math.isfinite(out):
-                                continue
-                            cache[slug] = ModelPricing(slug=slug, input_price_per_1m=float(inp), output_price_per_1m=float(out))
+                cache = self._build_pricing_cache(data)
 
                 self._pricing_cache = cache
                 self._pricing_fetched_at = time.monotonic()
@@ -362,6 +344,36 @@ class AiCostCalc:
             except Exception as e:
                 self._pricing_failed_at = time.monotonic()
                 self._report_error("Failed to fetch pricing data", cause=e)
+
+    def _build_pricing_cache(self, data: Any) -> dict[str, ModelPricing]:
+        cache: dict[str, ModelPricing] = {}
+        if not isinstance(data, dict):
+            return cache
+
+        models = data.get("models")
+        if not isinstance(models, list):
+            return cache
+
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            slug = model.get("slug")
+            pricing = model.get("pricing")
+            if not isinstance(slug, str) or not slug or not isinstance(pricing, dict):
+                continue
+            inp = pricing.get("input_per_1m_usd")
+            out = pricing.get("output_per_1m_usd")
+            if not isinstance(inp, (int, float)) or not isinstance(out, (int, float)):
+                continue
+            if not math.isfinite(inp) or not math.isfinite(out):
+                continue
+            cache[slug] = ModelPricing(
+                slug=slug,
+                input_price_per_1m=float(inp),
+                output_price_per_1m=float(out),
+            )
+
+        return cache
 
     def _flush_loop(self, interval: float) -> None:
         while not self._stop.wait(interval):

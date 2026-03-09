@@ -17,6 +17,10 @@ Use it in two ways:
 
 The `model` passed to `cost(...)` must match a `slug` from: https://margindash.com/api/v1/models
 
+- The SDK reads pricing from:
+  - `models[].pricing.input_per_1m_usd`
+  - `models[].pricing.output_per_1m_usd`
+- The API also returns benchmark variants at `models[].benchmarks.variants` (not required for `cost()`)
 - Pricing data is cached per `AiCostCalc` instance for 24 hours
 - Cache refresh happens automatically when the cache is stale
 - If a refresh fails after a successful fetch, the SDK reuses last-known pricing and retries after backoff
@@ -57,9 +61,14 @@ from ai_cost_calc import AiCostCalc
 
 md = AiCostCalc()
 
-result = md.cost("gpt-4o", input_tokens=1000, output_tokens=500)
-if result:
-    print(result.total_cost)
+# Exact cost from token counts
+result = md.cost("openai/gpt-4o", input_tokens=1000, output_tokens=500)
+
+# Estimate from input + output text
+result2 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
+
+# Estimate from input text only (output defaults to 0 tokens)
+result3 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.")
 ```
 
 ## Quickstart (Usage Tracking)
@@ -74,12 +83,11 @@ openai = OpenAI(api_key="YOUR_OPENAI_KEY")
 md = AiCostCalc(api_key="YOUR_API_KEY")
 
 response = openai.chat.completions.create(
-    model="gpt-4o",
+    model="openai/gpt-4o",
     messages=[{"role": "user", "content": "Hello"}],
 )
 
 md.add_usage(
-    vendor="openai",
     model=response.model,
     input_tokens=(response.usage.prompt_tokens if response.usage else 0),
     output_tokens=(response.usage.completion_tokens if response.usage else 0),
@@ -117,7 +125,6 @@ OpenAI (`chat.completions`):
 
 ```python
 md.add_usage(
-    vendor="openai",
     model=response.model,
     input_tokens=(response.usage.prompt_tokens if response.usage else 0),
     output_tokens=(response.usage.completion_tokens if response.usage else 0),
@@ -128,7 +135,6 @@ Anthropic (`messages`):
 
 ```python
 md.add_usage(
-    vendor="anthropic",
     model=response.model,
     input_tokens=(response.usage.input_tokens if response.usage else 0),
     output_tokens=(response.usage.output_tokens if response.usage else 0),
@@ -140,8 +146,7 @@ Google Gemini:
 ```python
 usage = response.get("usageMetadata", {})
 md.add_usage(
-    vendor="google",
-    model=response.get("modelVersion", "gemini-2.0-flash"),
+    model=response.get("modelVersion", "google/gemini-2.0-flash"),
     input_tokens=usage.get("promptTokenCount", 0),
     output_tokens=usage.get("candidatesTokenCount", 0),
 )
@@ -168,7 +173,7 @@ Common env vars:
 
 Exact cost mode.
 
-- `model`: model slug (example: `gpt-4o`, `claude-sonnet-4`)
+- `model`: model slug (example: `openai/gpt-4o`, `anthropic/claude-sonnet-4`)
 - `input_tokens`: non-negative integer
 - `output_tokens`: non-negative integer
 
@@ -196,7 +201,7 @@ Returns `CostResult | None`.
 - `output_tokens`
 - `estimated`
 
-### `add_usage(*, vendor, model, input_tokens, output_tokens)`
+### `add_usage(*, model, input_tokens, output_tokens)`
 
 Buffers usage from one AI call. Requires `api_key` in constructor.
 
@@ -264,7 +269,7 @@ Idempotency:
 ## Privacy
 
 Free cost mode only fetches pricing data.
-If tracking is enabled, the SDK sends event metadata (for example: customer ID, event type, revenue), plus model/vendor and token counts.
+If tracking is enabled, the SDK sends event metadata (for example: customer ID, event type, revenue), plus model and token counts.
 Request/response content is not sent.
 
 ## Troubleshooting
