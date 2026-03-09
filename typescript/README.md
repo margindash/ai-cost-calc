@@ -94,7 +94,6 @@ async function run() {
   });
 
   md.addUsage({
-    vendor: "openai",
     model: response.model,
     inputTokens: response.usage?.prompt_tokens ?? 0,
     outputTokens: response.usage?.completion_tokens ?? 0,
@@ -155,7 +154,7 @@ Google Gemini:
 
 ```typescript
 md.addUsage({
-  model: response.modelVersion ?? "google/gemini-2.0-flash",
+  model: response.modelVersion ?? "google/gemini-2.5-flash",
   inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
   outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
 });

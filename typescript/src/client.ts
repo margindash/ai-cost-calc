@@ -14,7 +14,7 @@ const DEFAULT_EVENT_TYPE = "ai_request";
 const MAX_QUEUE_SIZE = 1_000;
 const BATCH_SIZE = 50;
 const MAX_PENDING_USAGES = 1_000;
-const SDK_VERSION = "1.3.8";
+const SDK_VERSION = "1.3.9";
 const HTTP_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
 
@@ -22,7 +22,7 @@ const MAX_BACKOFF_MS = 30_000;
 interface WireEvent {
   customer_id: string;
   revenue_amount_in_cents: number | null;
-  vendor_responses: { vendor_name: string; ai_model_name: string; input_tokens: number; output_tokens: number }[];
+  vendor_responses: { model: string; input_tokens: number; output_tokens: number }[];
   unique_request_token: string;
   event_type: string;
   occurred_at: string;
@@ -340,15 +340,11 @@ export class AiCostCalc {
     const wire: WireEvent = {
       customer_id: event.customerId,
       revenue_amount_in_cents: event.revenueAmountInCents ?? null,
-      vendor_responses: usages.map((u) => {
-        const slashIdx = u.model.indexOf("/");
-        return {
-          vendor_name: slashIdx > 0 ? u.model.slice(0, slashIdx) : u.model,
-          ai_model_name: u.model,
-          input_tokens: u.inputTokens,
-          output_tokens: u.outputTokens,
-        };
-      }),
+      vendor_responses: usages.map((u) => ({
+        model: u.model,
+        input_tokens: u.inputTokens,
+        output_tokens: u.outputTokens,
+      })),
       unique_request_token: event.uniqueRequestToken ?? crypto.randomUUID(),
       event_type: event.eventType ?? this.defaultEventType,
       occurred_at: event.occurredAt ?? new Date().toISOString(),

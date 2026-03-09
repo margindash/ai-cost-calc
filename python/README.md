@@ -146,7 +146,7 @@ Google Gemini:
 ```python
 usage = response.get("usageMetadata", {})
 md.add_usage(
-    model=response.get("modelVersion", "google/gemini-2.0-flash"),
+    model=response.get("modelVersion", "google/gemini-2.5-flash"),
     input_tokens=usage.get("promptTokenCount", 0),
     output_tokens=usage.get("candidatesTokenCount", 0),
 )

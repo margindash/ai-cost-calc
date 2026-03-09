@@ -223,15 +223,12 @@ class AiCostCalc:
         """Record usage from a single AI API call."""
         if not self._require_api_key("add_usage"):
             return
-        slash_idx = model.find("/")
-        vendor_name = model[:slash_idx] if slash_idx > 0 else model
         with self._lock:
             if len(self._pending_usages) >= _MAX_PENDING_USAGES:
                 self._pending_usages.pop(0)
                 logger.warning("pending usages limit reached, dropping oldest")
             self._pending_usages.append({
-                "vendor_name": vendor_name,
-                "ai_model_name": model,
+                "model": model,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             })
