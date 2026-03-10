@@ -60,13 +60,13 @@ async function run() {
   const md = new AiCostCalc();
 
   // Exact cost from token counts
-  const result = await md.cost("provider/model-name", 1000, 500);
+  const result = await md.cost("openai/gpt-4o", 1000, 500);
 
   // Estimate from input + output text
-  const result2 = await md.cost("provider/model-name", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
+  const result2 = await md.cost("openai/gpt-4o", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
 
   // Estimate from input text only (output defaults to 0 tokens)
-  const result3 = await md.cost("provider/model-name", "Write a release note for this PR.");
+  const result3 = await md.cost("openai/gpt-4o", "Write a release note for this PR.");
 }
 
 run();
@@ -132,8 +132,8 @@ Provider response (`prompt_tokens` / `completion_tokens`):
 ```typescript
 md.addUsage({
   model: response.model,
-  inputTokens: response.usage?.prompt_tokens ?? 0,
-  outputTokens: response.usage?.completion_tokens ?? 0,
+  inputTokens: response.usage?.prompt_tokens,
+  outputTokens: response.usage?.completion_tokens,
 });
 ```
 
@@ -142,8 +142,8 @@ Anthropic (`messages`):
 ```typescript
 md.addUsage({
   model: response.model,
-  inputTokens: response.usage?.input_tokens ?? 0,
-  outputTokens: response.usage?.output_tokens ?? 0,
+  inputTokens: response.usage?.input_tokens,
+  outputTokens: response.usage?.output_tokens,
 });
 ```
 
@@ -152,8 +152,8 @@ Google Gemini:
 ```typescript
 md.addUsage({
   model: response.modelVersion ?? "google/gemini-2.5-flash",
-  inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-  outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+  inputTokens: response.usageMetadata?.promptTokenCount,
+  outputTokens: response.usageMetadata?.candidatesTokenCount,
 });
 ```
 
@@ -168,7 +168,7 @@ md.addUsage({
 
 Exact cost mode.
 
-- `model`: model slug (example: `provider/model-name`, `anthropic/claude-sonnet-4`)
+- `model`: model slug (example: `openai/gpt-4o`, `anthropic/claude-sonnet-4`)
 - `inputTokens`: non-negative integer
 - `outputTokens`: non-negative integer
 

@@ -58,13 +58,13 @@ from ai_cost_calc import AiCostCalc
 md = AiCostCalc()
 
 # Exact cost from token counts
-result = md.cost("provider/model-name", input_tokens=1000, output_tokens=500)
+result = md.cost("openai/gpt-4o", input_tokens=1000, output_tokens=500)
 
 # Estimate from input + output text
-result2 = md.cost("provider/model-name", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
+result2 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
 
 # Estimate from input text only (output defaults to 0 tokens)
-result3 = md.cost("provider/model-name", input_text="Write a release note for this PR.")
+result3 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.")
 ```
 
 ## Quickstart (Usage Tracking)
@@ -84,8 +84,8 @@ response = md.guarded_call(
 
 md.add_usage(
     model=response.model,
-    input_tokens=(response.usage.prompt_tokens if response.usage else 0),
-    output_tokens=(response.usage.completion_tokens if response.usage else 0),
+    input_tokens=response.usage.prompt_tokens,
+    output_tokens=response.usage.completion_tokens,
 )
 
 md.track(
@@ -113,7 +113,7 @@ async def main():
     result = await md.async_guarded_call(
         customer_id="cust_123",
         event_type="chat",
-        call=lambda: {"ok": True},
+        call=lambda: provider_call(),
     )
     print(result)
 
@@ -147,8 +147,8 @@ Provider response (`prompt_tokens` / `completion_tokens`):
 ```python
 md.add_usage(
     model=response.model,
-    input_tokens=(response.usage.prompt_tokens if response.usage else 0),
-    output_tokens=(response.usage.completion_tokens if response.usage else 0),
+    input_tokens=response.usage.prompt_tokens,
+    output_tokens=response.usage.completion_tokens,
 )
 ```
 
@@ -157,8 +157,8 @@ Anthropic (`messages`):
 ```python
 md.add_usage(
     model=response.model,
-    input_tokens=(response.usage.input_tokens if response.usage else 0),
-    output_tokens=(response.usage.output_tokens if response.usage else 0),
+    input_tokens=response.usage.input_tokens,
+    output_tokens=response.usage.output_tokens,
 )
 ```
 
@@ -242,7 +242,7 @@ Common env vars:
 
 Exact cost mode.
 
-- `model`: model slug (example: `provider/model-name`, `anthropic/claude-sonnet-4`)
+- `model`: model slug (example: `openai/gpt-4o`, `anthropic/claude-sonnet-4`)
 - `input_tokens`: non-negative integer
 - `output_tokens`: non-negative integer
 

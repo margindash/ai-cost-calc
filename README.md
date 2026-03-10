@@ -54,7 +54,7 @@ JavaScript / TypeScript:
 import { AiCostCalc } from "ai-cost-calc";
 
 const calc = new AiCostCalc();
-const result = await calc.cost("provider/model-name", 1000, 500);
+const result = await calc.cost("openai/gpt-4o", 1000, 500);
 console.log(result.totalCost);
 ```
 
@@ -64,7 +64,7 @@ Python:
 from ai_cost_calc import AiCostCalc
 
 calc = AiCostCalc()
-result = calc.cost("provider/model-name", input_tokens=1000, output_tokens=500)
+result = calc.cost("openai/gpt-4o", input_tokens=1000, output_tokens=500)
 print(result.total_cost)
 ```
 
@@ -78,10 +78,10 @@ import { AiCostCalc } from "ai-cost-calc";
 const calc = new AiCostCalc();
 
 // Input text only
-const result = await calc.cost("provider/model-name", "Write a release note for this PR.");
+const result = await calc.cost("openai/gpt-4o", "Write a release note for this PR.");
 
 // Input + output text
-const result2 = await calc.cost("provider/model-name", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
+const result2 = await calc.cost("openai/gpt-4o", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
 ```
 
 Python:
@@ -92,10 +92,10 @@ from ai_cost_calc import AiCostCalc
 calc = AiCostCalc()
 
 # Input text only
-result = calc.cost("provider/model-name", input_text="Write a release note for this PR.")
+result = calc.cost("openai/gpt-4o", input_text="Write a release note for this PR.")
 
 # Input + output text
-result2 = calc.cost("provider/model-name", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
+result2 = calc.cost("openai/gpt-4o", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
 ```
 
 ## Optional Usage Tracking
