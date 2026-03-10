@@ -54,7 +54,7 @@ JavaScript / TypeScript:
 import { AiCostCalc } from "ai-cost-calc";
 
 const calc = new AiCostCalc();
-const result = await calc.cost("openai/gpt-4o", 1000, 500);
+const result = await calc.cost("provider/model-name", 1000, 500);
 console.log(result.totalCost);
 ```
 
@@ -64,7 +64,7 @@ Python:
 from ai_cost_calc import AiCostCalc
 
 calc = AiCostCalc()
-result = calc.cost("openai/gpt-4o", input_tokens=1000, output_tokens=500)
+result = calc.cost("provider/model-name", input_tokens=1000, output_tokens=500)
 print(result.total_cost)
 ```
 
@@ -78,10 +78,10 @@ import { AiCostCalc } from "ai-cost-calc";
 const calc = new AiCostCalc();
 
 // Input text only
-const result = await calc.cost("openai/gpt-4o", "Write a release note for this PR.");
+const result = await calc.cost("provider/model-name", "Write a release note for this PR.");
 
 // Input + output text
-const result2 = await calc.cost("openai/gpt-4o", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
+const result2 = await calc.cost("provider/model-name", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
 ```
 
 Python:
@@ -92,10 +92,10 @@ from ai_cost_calc import AiCostCalc
 calc = AiCostCalc()
 
 # Input text only
-result = calc.cost("openai/gpt-4o", input_text="Write a release note for this PR.")
+result = calc.cost("provider/model-name", input_text="Write a release note for this PR.")
 
 # Input + output text
-result2 = calc.cost("openai/gpt-4o", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
+result2 = calc.cost("provider/model-name", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
 ```
 
 ## Optional Usage Tracking
@@ -109,18 +109,18 @@ import { AiCostCalc } from "ai-cost-calc";
 
 const calc = new AiCostCalc({ apiKey: process.env.AI_COST_CALC_API_KEY });
 
+const response = await calc.guardedCall(
+  { customerId: "cust_123", eventType: "chat" },
+  () => providerCall()
+);
+
 calc.addUsage({
-  model: "openai/gpt-4o",
-  inputTokens: 1000,
-  outputTokens: 500,
+  model: response.model,
+  inputTokens: response.usage?.prompt_tokens,
+  outputTokens: response.usage?.completion_tokens,
 });
 
 calc.track({ customerId: "cust_123", eventType: "chat" });
-
-await calc.guardedCall(
-  { customerId: "cust_123", eventType: "chat" },
-  () => Promise.resolve({ ok: true }) // replace with your provider call
-);
 await calc.shutdown();
 ```
 
@@ -131,15 +131,17 @@ from ai_cost_calc import AiCostCalc
 
 calc = AiCostCalc(api_key="YOUR_API_KEY")
 
+response = calc.guarded_call(customer_id="cust_123", event_type="chat", call=lambda: provider_call())
+
 calc.add_usage(
-    model="openai/gpt-4o",
-    input_tokens=1000,
-    output_tokens=500,
+    model=response.model,
+    input_tokens=response.usage.prompt_tokens,
+    output_tokens=response.usage.completion_tokens,
 )
 
 calc.track(customer_id="cust_123", event_type="chat")
-calc.guarded_call(customer_id="cust_123", event_type="chat", call=lambda: {"ok": True})  # replace with your provider call
 calc.shutdown()
+
 ```
 
 Note: Python `guarded_call` is synchronous; in async frameworks (for example FastAPI), use `async_guarded_call` (or run `guarded_call` in a thread executor).

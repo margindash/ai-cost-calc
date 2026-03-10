@@ -42,11 +42,7 @@ The `model` passed to `cost(...)` must match a `slug` from: https://margindash.c
 npm install ai-cost-calc
 ```
 
-For the tracking quickstart (OpenAI example):
-
-```bash
-npm install openai
-```
+For the tracking quickstart, install your provider SDK separately.
 
 For text-based estimation, `js-tiktoken` is used. It is an optional dependency,
 so some environments may skip it. If needed:
@@ -64,13 +60,13 @@ async function run() {
   const md = new AiCostCalc();
 
   // Exact cost from token counts
-  const result = await md.cost("openai/gpt-4o", 1000, 500);
+  const result = await md.cost("provider/model-name", 1000, 500);
 
   // Estimate from input + output text
-  const result2 = await md.cost("openai/gpt-4o", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
+  const result2 = await md.cost("provider/model-name", "Write a release note for this PR.", "Here is the release note for v1.3.7.");
 
   // Estimate from input text only (output defaults to 0 tokens)
-  const result3 = await md.cost("openai/gpt-4o", "Write a release note for this PR.");
+  const result3 = await md.cost("provider/model-name", "Write a release note for this PR.");
 }
 
 run();
@@ -82,21 +78,19 @@ Use an API key from your MarginDash dashboard.
 
 ```typescript
 import { AiCostCalc } from "ai-cost-calc";
-import OpenAI from "openai";
 
 async function run() {
   const md = new AiCostCalc({ apiKey: process.env.AI_COST_CALC_API_KEY });
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const response = await openai.chat.completions.create({
-    model: "openai/gpt-4o",
-    messages: [{ role: "user", content: "Hello" }],
-  });
+  const response = await md.guardedCall(
+    { customerId: "cust_123", eventType: "chat" },
+    () => providerCall()
+  );
 
   md.addUsage({
     model: response.model,
-    inputTokens: response.usage?.prompt_tokens ?? 0,
-    outputTokens: response.usage?.completion_tokens ?? 0,
+    inputTokens: response.usage?.prompt_tokens,
+    outputTokens: response.usage?.completion_tokens,
   });
 
   md.track({
@@ -104,15 +98,7 @@ async function run() {
     eventType: "chat",
     revenueAmountInCents: 250,
   });
-
-  const guarded = await md.guardedCall(
-    { customerId: "cust_123", eventType: "chat" },
-    () => openai.chat.completions.create({
-      model: "openai/gpt-4o",
-      messages: [{ role: "user", content: "Can I run?" }],
-    })
-  );
-  console.log(guarded.id);
+  console.log(response.id);
 
   await md.shutdown();
 }
@@ -141,7 +127,7 @@ run();
 
 ## Common Integration Patterns
 
-OpenAI (`chat.completions`):
+Provider response (`prompt_tokens` / `completion_tokens`):
 
 ```typescript
 md.addUsage({
@@ -174,7 +160,7 @@ md.addUsage({
 ## Environment Variables
 
 - `AI_COST_CALC_API_KEY`: required only for tracking (from your MarginDash dashboard)
-- `OPENAI_API_KEY`: only needed if you use the OpenAI SDK in your app
+- `PROVIDER_API_KEY`: only needed if your provider SDK requires one
 
 ## API Reference
 
@@ -182,7 +168,7 @@ md.addUsage({
 
 Exact cost mode.
 
-- `model`: model slug (example: `openai/gpt-4o`, `anthropic/claude-sonnet-4`)
+- `model`: model slug (example: `provider/model-name`, `anthropic/claude-sonnet-4`)
 - `inputTokens`: non-negative integer
 - `outputTokens`: non-negative integer
 

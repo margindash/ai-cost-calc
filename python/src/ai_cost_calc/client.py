@@ -20,7 +20,7 @@ from ai_cost_calc.types import AiCostCalcError, CostResult, ModelPricing
 
 logger = logging.getLogger("ai_cost_calc")
 
-_VERSION = "1.3.12"
+_VERSION = "1.3.13"
 _DEFAULT_BASE_URL = "https://margindash.com/api/v1"
 _DEFAULT_FLUSH_INTERVAL = 5.0
 _DEFAULT_MAX_RETRIES = 3

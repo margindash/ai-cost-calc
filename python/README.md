@@ -42,11 +42,7 @@ The `model` passed to `cost(...)` must match a `slug` from: https://margindash.c
 pip install ai-cost-calc
 ```
 
-For the tracking quickstart (OpenAI example):
-
-```bash
-pip install openai
-```
+For the tracking quickstart, install your provider SDK separately.
 
 For text-based estimation with `tiktoken`:
 
@@ -62,13 +58,13 @@ from ai_cost_calc import AiCostCalc
 md = AiCostCalc()
 
 # Exact cost from token counts
-result = md.cost("openai/gpt-4o", input_tokens=1000, output_tokens=500)
+result = md.cost("provider/model-name", input_tokens=1000, output_tokens=500)
 
 # Estimate from input + output text
-result2 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
+result2 = md.cost("provider/model-name", input_text="Write a release note for this PR.", output_text="Here is the release note for v1.3.7.")
 
 # Estimate from input text only (output defaults to 0 tokens)
-result3 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.")
+result3 = md.cost("provider/model-name", input_text="Write a release note for this PR.")
 ```
 
 ## Quickstart (Usage Tracking)
@@ -76,15 +72,14 @@ result3 = md.cost("openai/gpt-4o", input_text="Write a release note for this PR.
 Use an API key from your MarginDash dashboard.
 
 ```python
-from openai import OpenAI
 from ai_cost_calc import AiCostCalc
 
-openai = OpenAI(api_key="YOUR_OPENAI_KEY")
 md = AiCostCalc(api_key="YOUR_API_KEY")
 
-response = openai.chat.completions.create(
-    model="openai/gpt-4o",
-    messages=[{"role": "user", "content": "Hello"}],
+response = md.guarded_call(
+    customer_id="cust_123",
+    event_type="chat",
+    call=lambda: provider_call(),
 )
 
 md.add_usage(
@@ -98,16 +93,8 @@ md.track(
     event_type="chat",
     revenue_amount_in_cents=250,
 )
+print(response.id)
 
-guarded = md.guarded_call(
-    customer_id="cust_123",
-    event_type="chat",
-    call=lambda: openai.chat.completions.create(
-        model="openai/gpt-4o",
-        messages=[{"role": "user", "content": "Can I run?"}],
-    ),
-)
-print(guarded.id)
 
 md.shutdown()
 ```
@@ -155,7 +142,7 @@ asyncio.run(main())
 
 ## Common Integration Patterns
 
-OpenAI (`chat.completions`):
+Provider response (`prompt_tokens` / `completion_tokens`):
 
 ```python
 md.add_usage(
@@ -186,17 +173,15 @@ md.add_usage(
 )
 ```
 
-## End-to-End Async Example (FastAPI + OpenAI)
+## End-to-End Async Example (FastAPI + Provider SDK)
 
 ```python
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel
-from openai import AsyncOpenAI
 from ai_cost_calc import AiCostCalc
 
-openai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 md = AiCostCalc(api_key=os.environ["AI_COST_CALC_API_KEY"])
 
 
@@ -221,10 +206,7 @@ async def chat(req: ChatRequest):
     response = await md.async_guarded_call(
         customer_id=req.customer_id,
         event_type="chat",
-        call=lambda: openai.chat.completions.create(
-            model="openai/gpt-4o",
-            messages=[{"role": "user", "content": req.message}],
-        ),
+        call=lambda: provider_call(req.message),
     )
 
     usage = response.usage
@@ -235,7 +217,8 @@ async def chat(req: ChatRequest):
     )
     md.track(customer_id=req.customer_id, event_type="chat")
 
-    return {"text": response.choices[0].message.content}
+    # Adapt response parsing to your provider response shape.
+    return {"text": getattr(response, "text", None)}
 ```
 
 ## Environment Variables
@@ -251,7 +234,7 @@ md = AiCostCalc(api_key=os.getenv("AI_COST_CALC_API_KEY"))
 
 Common env vars:
 - `AI_COST_CALC_API_KEY`: required only for tracking (from your MarginDash dashboard)
-- `OPENAI_API_KEY`: only needed if you use OpenAI SDK in your app
+- `PROVIDER_API_KEY`: only needed if your provider SDK requires one
 
 ## API Reference
 
@@ -259,7 +242,7 @@ Common env vars:
 
 Exact cost mode.
 
-- `model`: model slug (example: `openai/gpt-4o`, `anthropic/claude-sonnet-4`)
+- `model`: model slug (example: `provider/model-name`, `anthropic/claude-sonnet-4`)
 - `input_tokens`: non-negative integer
 - `output_tokens`: non-negative integer
 
