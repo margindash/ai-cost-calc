@@ -1,6 +1,8 @@
 import json
 import time
 import urllib.request
+import asyncio
+from unittest.mock import MagicMock
 
 from ai_cost_calc import AiCostCalc
 
@@ -24,6 +26,15 @@ def check(condition, msg):
     else:
         failed += 1
         print(f"  ✗ {msg}")
+
+
+def _mock_response(json_data, status_code=200):
+    mock = MagicMock()
+    mock.status_code = status_code
+    mock.ok = status_code < 400
+    mock.json.return_value = json_data
+    mock.raise_for_status.return_value = None
+    return mock
 
 
 print("=== PYTHON SDK COMPREHENSIVE TEST ===\n")
@@ -619,6 +630,234 @@ calc26.add_usage(model="fake/will-fail", input_tokens=100, output_tokens=50)
 calc26.track(customer_id="sdk_test_py_error", event_type="error_test")
 calc26.flush()
 check(len(errors26) > 0, f"on_error called ({len(errors26)} error(s))")
+print()
+
+# ============================================================
+# TEST 27: guarded_call without API key allows call
+# ============================================================
+print("--- TEST 27: guarded_call without API key ---")
+calc27 = AiCostCalc()
+result27 = calc27.guarded_call(customer_id="sdk_test_py_guard_no_key", call=lambda: "ok")
+check(result27 == "ok", "guarded_call allows call without api_key")
+print()
+
+# ============================================================
+# TEST 28: guarded_call validates callback and customer_id
+# ============================================================
+print("--- TEST 28: guarded_call validates inputs ---")
+calc28 = AiCostCalc()
+guard28a = False
+try:
+    calc28.guarded_call(customer_id="  ", call=lambda: "ok")
+except ValueError as e:
+    guard28a = "customer_id is required" in str(e)
+check(guard28a, "guarded_call requires customer_id")
+
+guard28b = False
+try:
+    calc28.guarded_call(customer_id="cust_123", call="not_callable")  # type: ignore[arg-type]
+except ValueError as e:
+    guard28b = "call must be a callable" in str(e)
+check(guard28b, "guarded_call requires callable")
+print()
+
+# ============================================================
+# TEST 29: guarded_call blocks organization and callback not run
+# ============================================================
+print("--- TEST 29: guarded_call blocks organization budget ---")
+calc29 = AiCostCalc(api_key=API_KEY)
+calc29._session.get = MagicMock(return_value=_mock_response({
+    "version": 201,
+    "ttl_seconds": 30,
+    "changed": True,
+    "recompute_in_progress": False,
+    "blocked": {
+        "organization": True,
+        "event_types": [],
+        "customer_ids": [],
+    },
+}))
+called29 = False
+
+
+def _blocked_provider_29():
+    global called29
+    called29 = True
+    return "should_not_run"
+
+
+blocked29 = False
+try:
+    calc29.guarded_call(customer_id="sdk_test_py_guard_org", call=_blocked_provider_29)
+except RuntimeError as e:
+    blocked29 = "organization-wide budget limit" in str(e)
+check(blocked29, "guarded_call blocks on organization limit")
+check(called29 is False, "blocked guarded_call does not execute callback")
+calc29.shutdown()
+print()
+
+# ============================================================
+# TEST 30: guarded_call blocks event type and customer
+# ============================================================
+print("--- TEST 30: guarded_call blocks event type/customer ---")
+calc30 = AiCostCalc(api_key=API_KEY)
+calc30._session.get = MagicMock(return_value=_mock_response({
+    "version": 202,
+    "ttl_seconds": 30,
+    "changed": True,
+    "recompute_in_progress": False,
+    "blocked": {
+        "organization": False,
+        "event_types": ["chat"],
+        "customer_ids": ["cust_blocked"],
+    },
+}))
+blocked30a = False
+blocked30b = False
+try:
+    calc30.guarded_call(customer_id="cust_ok", event_type=" chat ", call=lambda: "nope")
+except RuntimeError as e:
+    blocked30a = "event type budget limit (chat)" in str(e)
+try:
+    calc30.guarded_call(customer_id=" cust_blocked ", call=lambda: "nope")
+except RuntimeError as e:
+    blocked30b = "customer budget limit (cust_blocked)" in str(e)
+check(blocked30a, "guarded_call blocks matching event_type")
+check(blocked30b, "guarded_call blocks matching customer_id")
+calc30.shutdown()
+print()
+
+# ============================================================
+# TEST 31: guarded_call keeps state on unchanged blocklist
+# ============================================================
+print("--- TEST 31: guarded_call keeps prior state on unchanged response ---")
+calc31 = AiCostCalc(api_key=API_KEY)
+calc31._session.get = MagicMock(side_effect=[
+    _mock_response({
+        "version": 203,
+        "ttl_seconds": 30,
+        "changed": True,
+        "recompute_in_progress": False,
+        "blocked": {
+            "organization": False,
+            "event_types": [],
+            "customer_ids": ["cust_cached"],
+        },
+    }),
+    _mock_response({
+        "version": 203,
+        "ttl_seconds": 30,
+        "changed": False,
+        "recompute_in_progress": False,
+    }),
+])
+blocked31a = False
+blocked31b = False
+try:
+    calc31.guarded_call(customer_id="cust_cached", call=lambda: "nope")
+except RuntimeError as e:
+    blocked31a = "customer budget limit" in str(e)
+calc31._budget_next_poll_at = 0.0
+try:
+    calc31.guarded_call(customer_id="cust_cached", call=lambda: "still_nope")
+except RuntimeError as e:
+    blocked31b = "customer budget limit" in str(e)
+check(blocked31a, "first call blocked from changed blocklist payload")
+check(blocked31b, "second call remains blocked when blocklist says unchanged")
+check(calc31._session.get.call_count == 2, f"blocklist fetched twice (got {calc31._session.get.call_count})")
+calc31.shutdown()
+print()
+
+# ============================================================
+# TEST 32: guarded_call fail-open/fail-closed behavior
+# ============================================================
+print("--- TEST 32: guarded_call fail-open and fail-closed ---")
+calc32a = AiCostCalc(api_key=API_KEY)
+calc32a._session.get = MagicMock(side_effect=ConnectionError("network down"))
+result32a = calc32a.guarded_call(customer_id="cust_fail_open", call=lambda: "allowed")
+check(result32a == "allowed", "guarded_call defaults to fail-open")
+calc32a.shutdown()
+
+calc32b = AiCostCalc(api_key=API_KEY, budget_fail_closed=True)
+calc32b._session.get = MagicMock(side_effect=ConnectionError("network down"))
+blocked32b = False
+try:
+    calc32b.guarded_call(customer_id="cust_fail_closed", call=lambda: "blocked")
+except RuntimeError as e:
+    blocked32b = "fail-closed mode" in str(e)
+check(blocked32b, "guarded_call blocks in fail-closed mode")
+calc32b.shutdown()
+print()
+
+# ============================================================
+# TEST 33: async_guarded_call supports sync and async callbacks
+# ============================================================
+print("--- TEST 33: async_guarded_call supports sync/async callbacks ---")
+calc33 = AiCostCalc(api_key=API_KEY)
+calc33._session.get = MagicMock(return_value=_mock_response({
+    "version": 204,
+    "ttl_seconds": 30,
+    "changed": True,
+    "recompute_in_progress": False,
+    "blocked": {
+        "organization": False,
+        "event_types": [],
+        "customer_ids": [],
+    },
+}))
+
+
+async def _provider_async_33():
+    return "async_ok"
+
+
+result33a = asyncio.run(calc33.async_guarded_call(
+    customer_id="sdk_test_py_guard_async",
+    event_type="chat",
+    call=_provider_async_33,
+))
+result33b = asyncio.run(calc33.async_guarded_call(
+    customer_id="sdk_test_py_guard_sync",
+    call=lambda: "sync_ok",
+))
+check(result33a == "async_ok", "async_guarded_call executes async callback")
+check(result33b == "sync_ok", "async_guarded_call executes sync callback")
+calc33.shutdown()
+print()
+
+# ============================================================
+# TEST 34: async_guarded_call blocks/fail-closed on refresh failure
+# ============================================================
+print("--- TEST 34: async_guarded_call block and fail-closed ---")
+calc34a = AiCostCalc(api_key=API_KEY)
+calc34a._session.get = MagicMock(return_value=_mock_response({
+    "version": 205,
+    "ttl_seconds": 30,
+    "changed": True,
+    "recompute_in_progress": False,
+    "blocked": {
+        "organization": False,
+        "event_types": [],
+        "customer_ids": ["cust_async_blocked"],
+    },
+}))
+blocked34a = False
+try:
+    asyncio.run(calc34a.async_guarded_call(customer_id="cust_async_blocked", call=lambda: "nope"))
+except RuntimeError as e:
+    blocked34a = "customer budget limit" in str(e)
+check(blocked34a, "async_guarded_call blocks matching customer_id")
+calc34a.shutdown()
+
+calc34b = AiCostCalc(api_key=API_KEY, budget_fail_closed=True)
+calc34b._session.get = MagicMock(side_effect=ConnectionError("network down"))
+blocked34b = False
+try:
+    asyncio.run(calc34b.async_guarded_call(customer_id="cust_async_fail_closed", call=lambda: "nope"))
+except RuntimeError as e:
+    blocked34b = "fail-closed mode" in str(e)
+check(blocked34b, "async_guarded_call blocks in fail-closed mode on refresh error")
+calc34b.shutdown()
 print()
 
 # ============================================================

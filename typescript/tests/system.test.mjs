@@ -13,6 +13,29 @@ function assert(condition, msg) {
   else { failed++; console.error(`  ✗ ${msg}`); }
 }
 
+function mockJsonResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+function installBlocklistMock(handler) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = input.toString();
+    if (url.includes("/budgets/blocklist")) {
+      return handler(url, init);
+    }
+    return originalFetch(input, init);
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
 console.log("=== TYPESCRIPT SDK COMPREHENSIVE TEST ===\n");
 
 // ============================================================
@@ -600,6 +623,184 @@ calc26.addUsage({ model: "fake/will-fail", inputTokens: 100, outputTokens: 50 })
 calc26.track({ customerId: "sdk_test_ts_error", eventType: "error_test" });
 await calc26.flush();
 assert(errors26.length > 0, `onError called (${errors26.length} error(s))`);
+console.log();
+
+// ============================================================
+// TEST 27: guardedCall without API key allows call
+// ============================================================
+console.log("--- TEST 27: guardedCall without API key ---");
+const calc27 = new AiCostCalc();
+const result27 = await calc27.guardedCall({ customerId: "sdk_test_ts_guard_no_key" }, () => "ok");
+assert(result27 === "ok", "guardedCall allows call without apiKey");
+console.log();
+
+// ============================================================
+// TEST 28: guardedCall validates callback and customerId
+// ============================================================
+console.log("--- TEST 28: guardedCall validates inputs ---");
+const calc28 = new AiCostCalc();
+let guard28a = false;
+try {
+  await calc28.guardedCall({ customerId: "cust_123" }, null);
+} catch (err) {
+  guard28a = String(err.message || err).includes("function callback");
+}
+assert(guard28a, "guardedCall rejects non-function callback");
+
+let guard28b = false;
+try {
+  await calc28.guardedCall({}, () => "ok");
+} catch (err) {
+  guard28b = String(err.message || err).includes("context.customerId");
+}
+assert(guard28b, "guardedCall requires context.customerId");
+console.log();
+
+// ============================================================
+// TEST 29: guardedCall blocks organization and callback not run
+// ============================================================
+console.log("--- TEST 29: guardedCall blocks organization budget ---");
+const restore29 = installBlocklistMock(async () => mockJsonResponse({
+  version: 101,
+  ttl_seconds: 30,
+  changed: true,
+  recompute_in_progress: false,
+  blocked: { organization: true, event_types: [], customer_ids: [] },
+}));
+const calc29 = new AiCostCalc({ apiKey: API_KEY, debug: true });
+let called29 = false;
+let blocked29 = false;
+try {
+  await calc29.guardedCall({ customerId: "sdk_test_ts_guard_org" }, () => {
+    called29 = true;
+    return "should_not_run";
+  });
+} catch (err) {
+  blocked29 = String(err.message || err).includes("organization-wide budget limit");
+}
+assert(blocked29, "guardedCall blocks on organization limit");
+assert(called29 === false, "blocked guardedCall does not execute callback");
+await calc29.shutdown();
+restore29();
+console.log();
+
+// ============================================================
+// TEST 30: guardedCall blocks event type and customer
+// ============================================================
+console.log("--- TEST 30: guardedCall blocks event type/customer ---");
+const restore30 = installBlocklistMock(async () => mockJsonResponse({
+  version: 102,
+  ttl_seconds: 30,
+  changed: true,
+  recompute_in_progress: false,
+  blocked: { organization: false, event_types: ["chat"], customer_ids: ["cust_blocked"] },
+}));
+const calc30 = new AiCostCalc({ apiKey: API_KEY, debug: true });
+let blocked30a = false;
+let blocked30b = false;
+try {
+  await calc30.guardedCall({ customerId: "cust_ok", eventType: " chat " }, () => "nope");
+} catch (err) {
+  blocked30a = String(err.message || err).includes("event type budget limit (chat)");
+}
+try {
+  await calc30.guardedCall({ customerId: " cust_blocked " }, () => "nope");
+} catch (err) {
+  blocked30b = String(err.message || err).includes("customer budget limit (cust_blocked)");
+}
+assert(blocked30a, "guardedCall blocks matching eventType");
+assert(blocked30b, "guardedCall blocks matching customerId");
+await calc30.shutdown();
+restore30();
+console.log();
+
+// ============================================================
+// TEST 31: guardedCall keeps state on unchanged blocklist
+// ============================================================
+console.log("--- TEST 31: guardedCall keeps prior state on unchanged response ---");
+let blocklistCalls31 = 0;
+const restore31 = installBlocklistMock(async () => {
+  blocklistCalls31 += 1;
+  if (blocklistCalls31 === 1) {
+    return mockJsonResponse({
+      version: 103,
+      ttl_seconds: 30,
+      changed: true,
+      recompute_in_progress: false,
+      blocked: { organization: false, event_types: [], customer_ids: ["cust_cached"] },
+    });
+  }
+  return mockJsonResponse({
+    version: 103,
+    ttl_seconds: 30,
+    changed: false,
+    recompute_in_progress: false,
+  });
+});
+const calc31 = new AiCostCalc({ apiKey: API_KEY, debug: true });
+let blocked31a = false;
+let blocked31b = false;
+try {
+  await calc31.guardedCall({ customerId: "cust_cached" }, () => "nope");
+} catch (err) {
+  blocked31a = String(err.message || err).includes("customer budget limit");
+}
+calc31.budgetNextPollAt = 0;
+try {
+  await calc31.guardedCall({ customerId: "cust_cached" }, () => "still_nope");
+} catch (err) {
+  blocked31b = String(err.message || err).includes("customer budget limit");
+}
+assert(blocked31a, "first call blocked from changed blocklist payload");
+assert(blocked31b, "second call remains blocked when blocklist says unchanged");
+assert(blocklistCalls31 === 2, `blocklist fetched twice (got ${blocklistCalls31})`);
+await calc31.shutdown();
+restore31();
+console.log();
+
+// ============================================================
+// TEST 32: guardedCall fail-open/fail-closed behavior
+// ============================================================
+console.log("--- TEST 32: guardedCall fail-open and fail-closed ---");
+const restore32 = installBlocklistMock(async () => {
+  throw new Error("network down");
+});
+const calc32a = new AiCostCalc({ apiKey: API_KEY, debug: true });
+const result32a = await calc32a.guardedCall({ customerId: "cust_fail_open" }, () => "allowed");
+assert(result32a === "allowed", "guardedCall defaults to fail-open");
+await calc32a.shutdown();
+
+const calc32b = new AiCostCalc({ apiKey: API_KEY, debug: true, budgetFailClosed: true });
+let blocked32b = false;
+try {
+  await calc32b.guardedCall({ customerId: "cust_fail_closed" }, () => "blocked");
+} catch (err) {
+  blocked32b = String(err.message || err).includes("fail-closed mode");
+}
+assert(blocked32b, "guardedCall blocks on refresh failure in fail-closed mode");
+await calc32b.shutdown();
+restore32();
+console.log();
+
+// ============================================================
+// TEST 33: guardedCall supports async callback
+// ============================================================
+console.log("--- TEST 33: guardedCall supports async callback ---");
+const restore33 = installBlocklistMock(async () => mockJsonResponse({
+  version: 104,
+  ttl_seconds: 30,
+  changed: true,
+  recompute_in_progress: false,
+  blocked: { organization: false, event_types: [], customer_ids: [] },
+}));
+const calc33 = new AiCostCalc({ apiKey: API_KEY, debug: true });
+const result33 = await calc33.guardedCall(
+  { customerId: "sdk_test_ts_guard_async", eventType: "chat" },
+  async () => "async_ok"
+);
+assert(result33 === "async_ok", "guardedCall executes async callback and returns result");
+await calc33.shutdown();
+restore33();
 console.log();
 
 // ============================================================

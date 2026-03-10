@@ -291,6 +291,24 @@ describe("guardedCall()", () => {
     assert.equal(result, "ok");
   });
 
+  it("requires a function callback", async () => {
+    const md = new AiCostCalc();
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      () => md.guardedCall({ customerId: "cust_123" }, undefined as any),
+      /function callback/
+    );
+  });
+
+  it("requires customerId in context", async () => {
+    const md = new AiCostCalc();
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      () => md.guardedCall({} as any, () => "ok"),
+      /context\.customerId/
+    );
+  });
+
   it("blocks when organization is blocked", async () => {
     globalThis.fetch = mock.fn(() =>
       Promise.resolve({
@@ -313,6 +331,65 @@ describe("guardedCall()", () => {
         () => md.guardedCall({ customerId: "cust_123" }, () => "ok"),
         /organization-wide budget limit/
       );
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("blocks when eventType is blocked", async () => {
+    globalThis.fetch = mock.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          version: 2,
+          ttl_seconds: 30,
+          changed: true,
+          recompute_in_progress: false,
+          blocked: { organization: false, event_types: ["chat"], customer_ids: [] },
+        }),
+        text: () => Promise.resolve(""),
+      } as unknown as Response)
+    ) as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      await assert.rejects(
+        () => md.guardedCall({ customerId: "cust_123", eventType: " chat " }, () => "ok"),
+        /event type budget limit \(chat\)/
+      );
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("blocks when customerId is blocked and does not execute callback", async () => {
+    globalThis.fetch = mock.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          version: 2,
+          ttl_seconds: 30,
+          changed: true,
+          recompute_in_progress: false,
+          blocked: { organization: false, event_types: [], customer_ids: ["cust_123"] },
+        }),
+        text: () => Promise.resolve(""),
+      } as unknown as Response)
+    ) as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    let called = false;
+    try {
+      await assert.rejects(
+        () => md.guardedCall({ customerId: " cust_123 " }, () => {
+          called = true;
+          return "ok";
+        }),
+        /customer budget limit \(cust_123\)/
+      );
+      assert.equal(called, false);
     } finally {
       await md.shutdown();
     }
@@ -341,6 +418,117 @@ describe("guardedCall()", () => {
       const second = await md.guardedCall({ customerId: "cust_123" }, () => "second");
       assert.equal(first, "first");
       assert.equal(second, "second");
+      assert.equal(blocklistFetch.mock.callCount(), 1);
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("keeps prior blocked state when blocklist response is unchanged", async () => {
+    const payloads = [
+      {
+        version: 11,
+        ttl_seconds: 30,
+        changed: true,
+        recompute_in_progress: false,
+        blocked: { organization: false, event_types: [], customer_ids: ["cust_123"] },
+      },
+      {
+        version: 11,
+        ttl_seconds: 30,
+        changed: false,
+        recompute_in_progress: false,
+      },
+    ];
+    let index = 0;
+    const blocklistFetch = mock.fn(() => {
+      const payload = payloads[Math.min(index, payloads.length - 1)];
+      index += 1;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(payload),
+        text: () => Promise.resolve(""),
+      } as unknown as Response);
+    });
+    globalThis.fetch = blocklistFetch as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      await assert.rejects(
+        () => md.guardedCall({ customerId: "cust_123" }, () => "blocked"),
+        /customer budget limit/
+      );
+
+      // Force a second blocklist poll
+      (md as any).budgetNextPollAt = 0;
+
+      await assert.rejects(
+        () => md.guardedCall({ customerId: "cust_123" }, () => "still-blocked"),
+        /customer budget limit/
+      );
+
+      assert.equal(blocklistFetch.mock.callCount(), 2);
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("supports async provider callbacks", async () => {
+    globalThis.fetch = mock.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          version: 2,
+          ttl_seconds: 30,
+          changed: true,
+          recompute_in_progress: false,
+          blocked: { organization: false, event_types: [], customer_ids: [] },
+        }),
+        text: () => Promise.resolve(""),
+      } as unknown as Response)
+    ) as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      const result = await md.guardedCall({ customerId: "cust_123" }, async () => "ok");
+      assert.equal(result, "ok");
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("deduplicates concurrent blocklist refreshes", async () => {
+    const blocklistFetch = mock.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({
+                version: 12,
+                ttl_seconds: 30,
+                changed: true,
+                recompute_in_progress: false,
+                blocked: { organization: false, event_types: [], customer_ids: [] },
+              }),
+              text: () => Promise.resolve(""),
+            } as unknown as Response);
+          }, 10);
+        })
+    );
+    globalThis.fetch = blocklistFetch as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      const [a, b] = await Promise.all([
+        md.guardedCall({ customerId: "cust_123" }, () => "a"),
+        md.guardedCall({ customerId: "cust_456" }, () => "b"),
+      ]);
+      assert.equal(a, "a");
+      assert.equal(b, "b");
       assert.equal(blocklistFetch.mock.callCount(), 1);
     } finally {
       await md.shutdown();
