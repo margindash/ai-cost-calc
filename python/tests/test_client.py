@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -92,6 +93,160 @@ class TestNoApiKey:
 
         with pytest.raises(ValueError, match="flush_interval"):
             AiCostCalc(api_key="key", flush_interval=-1)
+
+
+class TestGuardedCall:
+    def test_guarded_call_without_api_key_allows_call(self):
+        md = AiCostCalc()
+        result = md.guarded_call(customer_id="cust_123", call=lambda: "ok")
+        assert result == "ok"
+
+    def test_guarded_call_blocks_on_organization_limit(self):
+        md = AiCostCalc(api_key="test_key", flush_interval=60)
+        try:
+            md._session.get = MagicMock(return_value=_mock_response({
+                "version": 2,
+                "ttl_seconds": 30,
+                "changed": True,
+                "recompute_in_progress": False,
+                "blocked": {
+                    "organization": True,
+                    "event_types": [],
+                    "customer_ids": [],
+                },
+            }))
+
+            with pytest.raises(RuntimeError, match="organization-wide budget limit"):
+                md.guarded_call(customer_id="cust_123", call=lambda: "blocked")
+        finally:
+            md.shutdown()
+
+    def test_guarded_call_uses_cached_blocklist_until_ttl(self):
+        md = AiCostCalc(api_key="test_key", flush_interval=60)
+        try:
+            md._session.get = MagicMock(return_value=_mock_response({
+                "version": 3,
+                "ttl_seconds": 30,
+                "changed": True,
+                "recompute_in_progress": False,
+                "blocked": {
+                    "organization": False,
+                    "event_types": [],
+                    "customer_ids": [],
+                },
+            }))
+
+            assert md.guarded_call(customer_id="cust_123", call=lambda: "first") == "first"
+            assert md.guarded_call(customer_id="cust_123", call=lambda: "second") == "second"
+            assert md._session.get.call_count == 1
+        finally:
+            md.shutdown()
+
+    def test_guarded_call_fails_open_by_default_on_refresh_error(self):
+        errors: list = []
+        md = AiCostCalc(api_key="test_key", flush_interval=60, on_error=lambda e: errors.append(e))
+        try:
+            md._session.get = MagicMock(side_effect=ConnectionError("network down"))
+            assert md.guarded_call(customer_id="cust_123", call=lambda: "allowed") == "allowed"
+            assert any("fail-open mode" in e.message for e in errors)
+        finally:
+            md.shutdown()
+
+    def test_guarded_call_fails_closed_when_enabled(self):
+        md = AiCostCalc(api_key="test_key", flush_interval=60, budget_fail_closed=True)
+        try:
+            md._session.get = MagicMock(side_effect=ConnectionError("network down"))
+            with pytest.raises(RuntimeError, match="fail-closed mode"):
+                md.guarded_call(customer_id="cust_123", call=lambda: "blocked")
+        finally:
+            md.shutdown()
+
+    def test_send_refreshes_blocklist_when_events_version_changes(self):
+        md = AiCostCalc(api_key="test_key", flush_interval=60)
+        try:
+            md._session.post = MagicMock(return_value=_mock_response({
+                "results": [],
+                "budget_state_version": 7,
+            }))
+            md._session.get = MagicMock(return_value=_mock_response({
+                "version": 7,
+                "ttl_seconds": 30,
+                "changed": True,
+                "recompute_in_progress": False,
+                "blocked": {
+                    "organization": True,
+                    "event_types": [],
+                    "customer_ids": [],
+                },
+            }))
+
+            md._send([
+                {
+                    "customer_id": "cust_123",
+                    "revenue_amount_in_cents": None,
+                    "vendor_responses": [],
+                    "unique_request_token": "tok_1",
+                    "event_type": "chat",
+                    "occurred_at": "2026-03-09T00:00:00+00:00",
+                }
+            ])
+
+            with pytest.raises(RuntimeError, match="organization-wide budget limit"):
+                md.guarded_call(customer_id="cust_123", call=lambda: "blocked")
+            assert md._session.get.call_count == 1
+        finally:
+            md.shutdown()
+
+    def test_async_guarded_call_allows_async_call(self):
+        md = AiCostCalc(api_key="test_key", flush_interval=60)
+        try:
+            md._session.get = MagicMock(return_value=_mock_response({
+                "version": 4,
+                "ttl_seconds": 30,
+                "changed": True,
+                "recompute_in_progress": False,
+                "blocked": {
+                    "organization": False,
+                    "event_types": [],
+                    "customer_ids": [],
+                },
+            }))
+
+            async def provider_call() -> str:
+                return "ok"
+
+            result = asyncio.run(md.async_guarded_call(customer_id="cust_123", call=provider_call))
+            assert result == "ok"
+        finally:
+            md.shutdown()
+
+    def test_async_guarded_call_blocks_on_customer_limit(self):
+        md = AiCostCalc(api_key="test_key", flush_interval=60)
+        try:
+            md._session.get = MagicMock(return_value=_mock_response({
+                "version": 5,
+                "ttl_seconds": 30,
+                "changed": True,
+                "recompute_in_progress": False,
+                "blocked": {
+                    "organization": False,
+                    "event_types": [],
+                    "customer_ids": ["cust_123"],
+                },
+            }))
+
+            async def provider_call() -> str:
+                return "blocked"
+
+            with pytest.raises(RuntimeError, match="customer budget limit"):
+                asyncio.run(md.async_guarded_call(customer_id="cust_123", call=provider_call))
+        finally:
+            md.shutdown()
+
+    def test_async_guarded_call_supports_sync_call(self):
+        md = AiCostCalc()
+        result = asyncio.run(md.async_guarded_call(customer_id="cust_123", call=lambda: "ok"))
+        assert result == "ok"
 
 
 class TestCost:

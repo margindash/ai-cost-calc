@@ -5,6 +5,7 @@ export type {
   AiCostCalcError,
   CostResult,
   EventPayload,
+  GuardedCallContext,
   ModelPricing,
   UsageData,
 } from "./types.js";

@@ -274,6 +274,157 @@ describe("cost() with text", () => {
   });
 });
 
+describe("guardedCall()", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("allows calls without apiKey (no enforcement)", async () => {
+    const md = new AiCostCalc();
+    const result = await md.guardedCall({ customerId: "cust_123" }, () => "ok");
+    assert.equal(result, "ok");
+  });
+
+  it("blocks when organization is blocked", async () => {
+    globalThis.fetch = mock.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          version: 2,
+          ttl_seconds: 30,
+          changed: true,
+          recompute_in_progress: false,
+          blocked: { organization: true, event_types: [], customer_ids: [] },
+        }),
+        text: () => Promise.resolve(""),
+      } as unknown as Response)
+    ) as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      await assert.rejects(
+        () => md.guardedCall({ customerId: "cust_123" }, () => "ok"),
+        /organization-wide budget limit/
+      );
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("uses cached state until ttl expires", async () => {
+    const blocklistFetch = mock.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          version: 3,
+          ttl_seconds: 30,
+          changed: true,
+          recompute_in_progress: false,
+          blocked: { organization: false, event_types: [], customer_ids: [] },
+        }),
+        text: () => Promise.resolve(""),
+      } as unknown as Response)
+    );
+    globalThis.fetch = blocklistFetch as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      const first = await md.guardedCall({ customerId: "cust_123" }, () => "first");
+      const second = await md.guardedCall({ customerId: "cust_123" }, () => "second");
+      assert.equal(first, "first");
+      assert.equal(second, "second");
+      assert.equal(blocklistFetch.mock.callCount(), 1);
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("fails open by default when blocklist refresh fails", async () => {
+    const errors: { message: string }[] = [];
+    globalThis.fetch = mockFetchFailure() as unknown as typeof fetch;
+    const md = new AiCostCalc({
+      apiKey: "test_key",
+      flushIntervalMs: 60_000,
+      onError: (e) => errors.push(e),
+    });
+
+    try {
+      const result = await md.guardedCall({ customerId: "cust_123" }, () => "allowed");
+      assert.equal(result, "allowed");
+      assert.ok(errors.some((e) => e.message.includes("fail-open")));
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("fails closed when budgetFailClosed is enabled", async () => {
+    globalThis.fetch = mockFetchFailure() as unknown as typeof fetch;
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000, budgetFailClosed: true });
+    try {
+      await assert.rejects(
+        () => md.guardedCall({ customerId: "cust_123" }, () => "blocked"),
+        /fail-closed/
+      );
+    } finally {
+      await md.shutdown();
+    }
+  });
+
+  it("refreshes blocklist immediately when events response version changes", async () => {
+    const fetchMock = mock.fn((input: string | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/events")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ results: [], budget_state_version: 7 }),
+          text: () => Promise.resolve(""),
+        } as unknown as Response);
+      }
+      if (url.includes("/budgets/blocklist")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            version: 7,
+            ttl_seconds: 30,
+            changed: true,
+            recompute_in_progress: false,
+            blocked: { organization: true, event_types: [], customer_ids: [] },
+          }),
+          text: () => Promise.resolve(""),
+        } as unknown as Response);
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const md = new AiCostCalc({ apiKey: "test_key", flushIntervalMs: 60_000 });
+    try {
+      md.addUsage({ model: "openai/gpt-4o", inputTokens: 100, outputTokens: 50 });
+      md.track({ customerId: "cust_123", eventType: "chat" });
+      await md.flush();
+
+      await assert.rejects(
+        () => md.guardedCall({ customerId: "cust_123" }, () => "blocked"),
+        /organization-wide budget limit/
+      );
+
+      assert.equal(fetchMock.mock.callCount(), 2);
+    } finally {
+      await md.shutdown();
+    }
+  });
+});
+
 describe("Defensive parsing", () => {
   let originalFetch: typeof globalThis.fetch;
 

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
+import inspect
 import logging
 import math
 import random
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, TypeVar
 from uuid import uuid4
 
 import requests
@@ -18,7 +20,7 @@ from ai_cost_calc.types import AiCostCalcError, CostResult, ModelPricing
 
 logger = logging.getLogger("ai_cost_calc")
 
-_VERSION = "1.3.11"
+_VERSION = "1.3.12"
 _DEFAULT_BASE_URL = "https://margindash.com/api/v1"
 _DEFAULT_FLUSH_INTERVAL = 5.0
 _DEFAULT_MAX_RETRIES = 3
@@ -30,6 +32,10 @@ _HTTP_TIMEOUT = 10
 _MAX_BACKOFF = 30.0
 _PRICING_CACHE_TTL = 86_400    # 24 hours
 _PRICING_FAILURE_BACKOFF = 60  # 60 seconds
+_BLOCKLIST_TIMEOUT = 3
+_DEFAULT_BLOCKLIST_TTL = 30.0
+
+T = TypeVar("T")
 
 
 class AiCostCalc:
@@ -56,14 +62,18 @@ class AiCostCalc:
         flush_interval: float = _DEFAULT_FLUSH_INTERVAL,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         default_event_type: str = _DEFAULT_EVENT_TYPE,
+        budget_fail_closed: bool = False,
         on_error: Callable[[AiCostCalcError], None] | None = None,
     ) -> None:
         self._api_key = (api_key or "").strip()
         self._base_url = base_url.rstrip("/")
         if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
             raise ValueError("max_retries must be a non-negative integer")
+        if not isinstance(budget_fail_closed, bool):
+            raise ValueError("budget_fail_closed must be a boolean")
         self._max_retries = max_retries
         self._default_event_type = default_event_type
+        self._budget_fail_closed = budget_fail_closed
         self._on_error = on_error
         self._api_key_warned = False
 
@@ -77,6 +87,18 @@ class AiCostCalc:
         self._queue: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._stop = threading.Event()
+
+        # Budget enforcement cache
+        self._budget_state_version: int = 0
+        self._budget_state_initialized: bool = False
+        self._budget_next_poll_at: float = 0.0
+        self._budget_state_lock = threading.Lock()
+        self._budget_refresh_lock = threading.Lock()
+        self._budget_blocked_state: dict[str, Any] = {
+            "organization": False,
+            "event_types": set(),
+            "customer_ids": set(),
+        }
 
         # Pricing cache
         self._pricing_cache: dict[str, ModelPricing] | None = None
@@ -218,9 +240,10 @@ class AiCostCalc:
             return None
 
     def add_usage(
-        self, *, model: str, input_tokens: int, output_tokens: int
+        self, *, model: str, input_tokens: int, output_tokens: int, vendor: str | None = None
     ) -> None:
         """Record usage from a single AI API call."""
+        _ = vendor  # accepted for backward compatibility; model slug is authoritative
         if not self._require_api_key("add_usage"):
             return
         with self._lock:
@@ -266,6 +289,69 @@ class AiCostCalc:
         except Exception:
             logger.exception("ai-cost-calc: failed to enqueue event")
 
+    def guarded_call(
+        self,
+        *,
+        customer_id: str,
+        call: Callable[[], T],
+        event_type: str | None = None,
+    ) -> T:
+        """Run `call` only when cached budget state allows it.
+
+        Note: this method is synchronous and may perform blocking HTTP I/O
+        while refreshing budget state. In asyncio/FastAPI apps, run it in a
+        thread executor to avoid blocking the event loop.
+        """
+        if not isinstance(customer_id, str) or not customer_id.strip():
+            raise ValueError("customer_id is required for guarded_call")
+        if not callable(call):
+            raise ValueError("call must be a callable for guarded_call")
+
+        blocked, reason = self._is_budget_blocked(
+            customer_id=customer_id.strip(),
+            event_type=event_type.strip() if isinstance(event_type, str) else None,
+        )
+        if blocked:
+            message = reason or "Request blocked by MarginDash budget limits"
+            self._report_error(message)
+            raise RuntimeError(message)
+
+        return call()
+
+    async def async_guarded_call(
+        self,
+        *,
+        customer_id: str,
+        call: Callable[[], T | Awaitable[T]],
+        event_type: str | None = None,
+    ) -> T:
+        """Async variant of `guarded_call` for asyncio applications.
+
+        Budget-state evaluation runs in a thread, so the event loop is not blocked
+        by blocklist HTTP refreshes. The provider callback may be either sync or
+        async. If it returns an awaitable, it is awaited.
+        """
+        if not isinstance(customer_id, str) or not customer_id.strip():
+            raise ValueError("customer_id is required for async_guarded_call")
+        if not callable(call):
+            raise ValueError("call must be a callable for async_guarded_call")
+
+        blocked, reason = await asyncio.to_thread(
+            self._is_budget_blocked,
+            customer_id=customer_id.strip(),
+            event_type=event_type.strip() if isinstance(event_type, str) else None,
+        )
+
+        if blocked:
+            message = reason or "Request blocked by MarginDash budget limits"
+            self._report_error(message)
+            raise RuntimeError(message)
+
+        result = call()
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
     def flush(self) -> None:
         """Send all queued events immediately."""
         if not self._api_key:
@@ -304,6 +390,113 @@ class AiCostCalc:
             self._report_error(f"api_key required for {method} — calls will be skipped")
             self._api_key_warned = True
         return False
+
+    def _is_budget_blocked(self, *, customer_id: str, event_type: str | None) -> tuple[bool, str | None]:
+        if not self._require_api_key("guarded_call"):
+            return False, None
+
+        try:
+            self._refresh_budget_state_if_needed()
+        except Exception as e:
+            if self._budget_fail_closed:
+                return True, "Request blocked because budget state could not be refreshed (fail-closed mode)"
+            self._report_error("Budget state refresh failed; allowing request (fail-open mode)", cause=e)
+            return False, None
+
+        with self._budget_state_lock:
+            blocked_org = bool(self._budget_blocked_state.get("organization"))
+            blocked_event_types = set(self._budget_blocked_state.get("event_types", set()))
+            blocked_customer_ids = set(self._budget_blocked_state.get("customer_ids", set()))
+
+        if blocked_org:
+            return True, "Request blocked by organization-wide budget limit"
+        if event_type and event_type in blocked_event_types:
+            return True, f"Request blocked by event type budget limit ({event_type})"
+        if customer_id in blocked_customer_ids:
+            return True, f"Request blocked by customer budget limit ({customer_id})"
+        return False, None
+
+    def _refresh_budget_state_if_needed(self, *, force: bool = False) -> None:
+        if not self._api_key:
+            return
+
+        now = time.monotonic()
+        with self._budget_state_lock:
+            if not force and self._budget_state_initialized and now < self._budget_next_poll_at:
+                return
+            since_version = self._budget_state_version
+
+        with self._budget_refresh_lock:
+            now = time.monotonic()
+            with self._budget_state_lock:
+                if not force and self._budget_state_initialized and now < self._budget_next_poll_at:
+                    return
+                since_version = self._budget_state_version
+
+            resp = self._session.get(
+                f"{self._base_url}/budgets/blocklist",
+                params={"since_version": str(since_version)},
+                timeout=_BLOCKLIST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            self._apply_budget_blocklist_response(payload)
+
+    def _apply_budget_blocklist_response(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            payload = {}
+
+        raw_version = payload.get("version")
+        version = raw_version if isinstance(raw_version, int) and not isinstance(raw_version, bool) and raw_version >= 0 else None
+
+        raw_ttl = payload.get("ttl_seconds")
+        ttl = float(raw_ttl) if isinstance(raw_ttl, (int, float)) and math.isfinite(raw_ttl) and raw_ttl > 0 else _DEFAULT_BLOCKLIST_TTL
+
+        changed = payload.get("changed") is True
+        blocked = payload.get("blocked")
+
+        with self._budget_state_lock:
+            if changed:
+                if isinstance(blocked, dict):
+                    self._budget_blocked_state = self._normalize_blocked_state(blocked)
+                else:
+                    self._report_error("Budget blocklist response missing blocked payload for changed state")
+
+            if version is not None:
+                self._budget_state_version = version
+            self._budget_state_initialized = True
+            self._budget_next_poll_at = time.monotonic() + ttl
+
+    def _normalize_blocked_state(self, blocked: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "organization": bool(blocked.get("organization")),
+            "event_types": set(self._normalize_string_array(blocked.get("event_types"))),
+            "customer_ids": set(self._normalize_string_array(blocked.get("customer_ids"))),
+        }
+
+    def _normalize_string_array(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        normalized = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return list(dict.fromkeys(normalized))
+
+    def _refresh_budget_state_from_events_response(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        budget_state_version = payload.get("budget_state_version")
+        if not isinstance(budget_state_version, int) or isinstance(budget_state_version, bool) or budget_state_version < 0:
+            return
+
+        with self._budget_state_lock:
+            if budget_state_version == self._budget_state_version:
+                return
+            self._budget_state_version = budget_state_version
+            self._budget_next_poll_at = 0.0
+
+        try:
+            self._refresh_budget_state_if_needed(force=True)
+        except Exception as e:
+            self._report_error("Failed to refresh budget blocklist after event flush", cause=e)
 
     def _ensure_pricing(self) -> None:
         now = time.monotonic()
@@ -394,11 +587,19 @@ class AiCostCalc:
 
                 logger.debug("sent %d events (HTTP %d)", len(events), resp.status_code)
 
-                if not resp.ok:
-                    self._report_error(
-                        f"Request failed with status {resp.status_code}: {resp.text}",
-                        events=events,
-                    )
+                if resp.ok:
+                    payload: Any = None
+                    try:
+                        payload = resp.json()
+                    except Exception:
+                        payload = None
+                    self._refresh_budget_state_from_events_response(payload)
+                    return
+
+                self._report_error(
+                    f"Request failed with status {resp.status_code}: {resp.text}",
+                    events=events,
+                )
                 return
             except (requests.ConnectionError, requests.Timeout) as e:
                 last_err = e

@@ -3,6 +3,7 @@ import type {
   AiCostCalcError,
   CostResult,
   EventPayload,
+  GuardedCallContext,
   ModelPricing,
   UsageData,
 } from "./types.js";
@@ -14,9 +15,11 @@ const DEFAULT_EVENT_TYPE = "ai_request";
 const MAX_QUEUE_SIZE = 1_000;
 const BATCH_SIZE = 50;
 const MAX_PENDING_USAGES = 1_000;
-const SDK_VERSION = "1.3.11";
+const SDK_VERSION = "1.3.12";
 const HTTP_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
+const BLOCKLIST_TIMEOUT_MS = 3_000;
+const DEFAULT_BLOCKLIST_TTL_SECONDS = 30;
 
 /** Internal wire format for events (snake_case). */
 interface WireEvent {
@@ -26,6 +29,26 @@ interface WireEvent {
   unique_request_token: string;
   event_type: string;
   occurred_at: string;
+}
+
+interface WireBudgetBlockedState {
+  organization?: unknown;
+  event_types?: unknown;
+  customer_ids?: unknown;
+}
+
+interface WireBudgetBlocklistResponse {
+  version?: unknown;
+  ttl_seconds?: unknown;
+  changed?: unknown;
+  recompute_in_progress?: unknown;
+  blocked?: unknown;
+}
+
+interface BudgetBlockedState {
+  organization: boolean;
+  eventTypes: Set<string>;
+  customerIds: Set<string>;
 }
 
 /**
@@ -40,6 +63,7 @@ export class AiCostCalc {
   private readonly baseUrl: string;
   private readonly maxRetries: number;
   private readonly defaultEventType: string;
+  private readonly budgetFailClosed: boolean;
   private readonly onError?: (error: AiCostCalcError) => void;
   private readonly debug: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,6 +73,17 @@ export class AiCostCalc {
   private pendingUsages: UsageData[] = [];
   private readonly boundBeforeExit: () => void;
   private apiKeyWarned = false;
+
+  // Budget enforcement cache
+  private budgetStateVersion = 0;
+  private budgetStateInitialized = false;
+  private budgetNextPollAt = 0;
+  private budgetRefreshPromise: Promise<void> | null = null;
+  private budgetBlockedState: BudgetBlockedState = {
+    organization: false,
+    eventTypes: new Set<string>(),
+    customerIds: new Set<string>(),
+  };
 
   // Pricing cache
   private pricingCache: Map<string, ModelPricing> | null = null;
@@ -67,6 +102,7 @@ export class AiCostCalc {
       throw new Error("maxRetries must be a non-negative integer");
     }
     this.defaultEventType = config.defaultEventType ?? DEFAULT_EVENT_TYPE;
+    this.budgetFailClosed = config.budgetFailClosed ?? false;
     this.onError = config.onError;
     this.debug = config.debug ?? false;
 
@@ -189,6 +225,30 @@ export class AiCostCalc {
   }
 
   /**
+   * Wrap an AI provider call with cached budget enforcement.
+   * The SDK polls MarginDash blocklist state and blocks locally when needed.
+   */
+  async guardedCall<T>(context: GuardedCallContext, call: () => Promise<T> | T): Promise<T> {
+    if (typeof call !== "function") {
+      throw new Error("guardedCall requires a function callback");
+    }
+    const customerId = context.customerId?.trim();
+    if (!customerId) {
+      throw new Error("guardedCall requires context.customerId");
+    }
+    const eventType = context.eventType?.trim();
+
+    const verdict = await this.isBudgetBlocked({ customerId, eventType });
+    if (verdict.blocked) {
+      const message = verdict.reason ?? "Request blocked by MarginDash budget limits";
+      this.reportError({ message });
+      throw new Error(message);
+    }
+
+    return await Promise.resolve(call());
+  }
+
+  /**
    * Flush all queued events to the API immediately.
    */
   async flush(): Promise<void> {
@@ -233,6 +293,138 @@ export class AiCostCalc {
       this.apiKeyWarned = true;
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Budget enforcement
+  // ---------------------------------------------------------------------------
+
+  private async isBudgetBlocked(context: { customerId: string; eventType?: string }): Promise<{ blocked: boolean; reason?: string }> {
+    if (!this.requireApiKey("guardedCall")) {
+      return { blocked: false };
+    }
+
+    try {
+      await this.refreshBudgetStateIfNeeded();
+    } catch (err) {
+      if (this.budgetFailClosed) {
+        return { blocked: true, reason: "Request blocked because budget state could not be refreshed (fail-closed mode)" };
+      }
+      this.reportError({ message: "Budget state refresh failed; allowing request (fail-open mode)", cause: err });
+      return { blocked: false };
+    }
+
+    if (this.budgetBlockedState.organization) {
+      return { blocked: true, reason: "Request blocked by organization-wide budget limit" };
+    }
+    if (context.eventType && this.budgetBlockedState.eventTypes.has(context.eventType)) {
+      return { blocked: true, reason: `Request blocked by event type budget limit (${context.eventType})` };
+    }
+    if (this.budgetBlockedState.customerIds.has(context.customerId)) {
+      return { blocked: true, reason: `Request blocked by customer budget limit (${context.customerId})` };
+    }
+    return { blocked: false };
+  }
+
+  private async refreshBudgetStateIfNeeded(force = false): Promise<void> {
+    if (!this.apiKey) return;
+
+    const now = Date.now();
+    if (!force && this.budgetStateInitialized && now < this.budgetNextPollAt) return;
+    if (this.budgetRefreshPromise) return this.budgetRefreshPromise;
+
+    this.budgetRefreshPromise = (async () => {
+      const query = new URLSearchParams({ since_version: String(this.budgetStateVersion) });
+      const response = await fetch(`${this.baseUrl}/budgets/blocklist?${query.toString()}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "User-Agent": `ai-cost-calc-node/${SDK_VERSION}`,
+        },
+        signal: AbortSignal.timeout(BLOCKLIST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        let body = "";
+        try { body = await response.text(); } catch { /* ignore */ }
+        throw new Error(`Budget blocklist request failed with status ${response.status}: ${body}`);
+      }
+
+      const payload: unknown = await response.json();
+      this.applyBudgetBlocklistResponse(payload);
+    })();
+
+    try {
+      await this.budgetRefreshPromise;
+    } finally {
+      this.budgetRefreshPromise = null;
+    }
+  }
+
+  private applyBudgetBlocklistResponse(payload: unknown): void {
+    const response = (typeof payload === "object" && payload !== null)
+      ? (payload as WireBudgetBlocklistResponse)
+      : {};
+
+    const version = Number.isInteger(response.version) && (response.version as number) >= 0
+      ? (response.version as number)
+      : this.budgetStateVersion;
+
+    const ttlSeconds = typeof response.ttl_seconds === "number"
+      && Number.isFinite(response.ttl_seconds)
+      && response.ttl_seconds > 0
+      ? response.ttl_seconds
+      : DEFAULT_BLOCKLIST_TTL_SECONDS;
+
+    if (response.changed === true) {
+      if (response.blocked === undefined) {
+        this.reportError({ message: "Budget blocklist response missing blocked payload for changed state" });
+      } else {
+        this.budgetBlockedState = this.normalizeBlockedState(response.blocked);
+      }
+    }
+
+    this.budgetStateVersion = version;
+    this.budgetStateInitialized = true;
+    this.budgetNextPollAt = Date.now() + (ttlSeconds * 1000);
+  }
+
+  private normalizeBlockedState(rawBlocked: unknown): BudgetBlockedState {
+    const raw = (typeof rawBlocked === "object" && rawBlocked !== null)
+      ? (rawBlocked as WireBudgetBlockedState)
+      : {};
+
+    return {
+      organization: Boolean(raw.organization),
+      eventTypes: new Set(this.normalizeStringArray(raw.event_types)),
+      customerIds: new Set(this.normalizeStringArray(raw.customer_ids)),
+    };
+  }
+
+  private normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const normalized = value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    return Array.from(new Set(normalized));
+  }
+
+  private async refreshBudgetStateFromEventsResponse(payload: unknown): Promise<void> {
+    if (typeof payload !== "object" || payload === null) return;
+
+    const budgetVersion = (payload as Record<string, unknown>).budget_state_version;
+    if (!Number.isInteger(budgetVersion) || (budgetVersion as number) < 0) return;
+    if ((budgetVersion as number) === this.budgetStateVersion) return;
+
+    this.budgetStateVersion = budgetVersion as number;
+    this.budgetNextPollAt = 0;
+
+    try {
+      await this.refreshBudgetStateIfNeeded(true);
+    } catch (err) {
+      this.reportError({ message: "Failed to refresh budget blocklist after event flush", cause: err });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -394,11 +586,20 @@ export class AiCostCalc {
 
       this.log(`batch sent (status ${response.status}, ${events.length} ${events.length === 1 ? "event" : "events"})`);
 
-      if (!response.ok) {
-        let body = "";
-        try { body = await response.text(); } catch { /* ignore */ }
-        this.reportError({ message: `Request failed with status ${response.status}: ${body}` });
+      if (response.ok) {
+        let payload: unknown = null;
+        try {
+          payload = await response.json();
+        } catch {
+          // ignore non-JSON success bodies
+        }
+        await this.refreshBudgetStateFromEventsResponse(payload);
+        return;
       }
+
+      let body = "";
+      try { body = await response.text(); } catch { /* ignore */ }
+      this.reportError({ message: `Request failed with status ${response.status}: ${body}` });
     } catch (err) {
       const message = err instanceof Response
         ? `Request failed after retries (status ${err.status})`

@@ -116,6 +116,11 @@ calc.addUsage({
 });
 
 calc.track({ customerId: "cust_123", eventType: "chat" });
+
+await calc.guardedCall(
+  { customerId: "cust_123", eventType: "chat" },
+  () => Promise.resolve({ ok: true }) // replace with your provider call
+);
 await calc.shutdown();
 ```
 
@@ -133,8 +138,11 @@ calc.add_usage(
 )
 
 calc.track(customer_id="cust_123", event_type="chat")
+calc.guarded_call(customer_id="cust_123", event_type="chat", call=lambda: {"ok": True})  # replace with your provider call
 calc.shutdown()
 ```
+
+Note: Python `guarded_call` is synchronous; in async frameworks (for example FastAPI), use `async_guarded_call` (or run `guarded_call` in a thread executor).
 
 ## Modes At A Glance
 
@@ -144,6 +152,7 @@ calc.shutdown()
 | Exact costs from provider token usage | token-count `cost` |
 | Early estimation from prompt/response text | text-based `cost` |
 | Customer and revenue tracking | `addUsage`/`track` (TS) or `add_usage`/`track` (Python) with `apiKey` |
+| SDK-side budget blocking | `guardedCall` (TS) / `guarded_call` or `async_guarded_call` (Python) with `apiKey` |
 
 ## How Pricing Works
 
@@ -165,3 +174,5 @@ calc.shutdown()
 
 - [TypeScript SDK README](./typescript/README.md)
 - [Python SDK README](./python/README.md)
+- [TypeScript Changelog](./typescript/CHANGELOG.md)
+- [Python Changelog](./python/CHANGELOG.md)

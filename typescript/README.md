@@ -105,6 +105,15 @@ async function run() {
     revenueAmountInCents: 250,
   });
 
+  const guarded = await md.guardedCall(
+    { customerId: "cust_123", eventType: "chat" },
+    () => openai.chat.completions.create({
+      model: "openai/gpt-4o",
+      messages: [{ role: "user", content: "Can I run?" }],
+    })
+  );
+  console.log(guarded.id);
+
   await md.shutdown();
 }
 
@@ -119,6 +128,7 @@ run();
 | Exact costs from provider token usage | `cost(model, inputTokens, outputTokens)` |
 | Early estimation from prompt/response text | `cost(model, inputText, outputText?)` |
 | MarginDash customer/revenue tracking | `addUsage()` + `track()` with `apiKey` |
+| SDK-side budget blocking | `guardedCall()` with `apiKey` |
 
 ## Return Values and Failure Modes
 
@@ -126,6 +136,7 @@ run();
 | --- | --- |
 | `cost()` | Returns `null` |
 | `addUsage()` / `track()` without `apiKey` | No-op, reports via `onError` once |
+| `guardedCall()` | Throws when blocked by budget; defaults to fail-open on blocklist fetch failure |
 | `flush()` / `shutdown()` | Do not throw for request failures; report via `onError` |
 
 ## Common Integration Patterns
@@ -208,6 +219,21 @@ Buffers usage from one AI call. Requires `apiKey` in constructor.
 Creates an event from all currently buffered usage entries and enqueues it for delivery.
 Requires `apiKey`.
 
+### `guardedCall({ customerId, eventType? }, callFn)`
+
+Runs `callFn` only when current cached budget state allows it.
+
+- `customerId`: required
+- `eventType`: optional
+- `callFn`: your provider call callback
+
+Behavior:
+
+- Polls `GET /api/v1/budgets/blocklist` using TTL/version caching
+- Triggers immediate refresh when `/events` response returns a newer `budget_state_version`
+- Throws when blocked by organization/event/customer budget
+- Fail-open by default when blocklist fetch fails (set `budgetFailClosed: true` to invert)
+
 ### `flush()`
 
 Immediately sends queued events. Returns `Promise<void>`.
@@ -228,6 +254,7 @@ const md = new AiCostCalc({
   flushIntervalMs: 5000,
   maxRetries: 3,
   defaultEventType: "ai_request",
+  budgetFailClosed: false,
   debug: false,
   onError: (err) => console.error(err.message),
 });
@@ -239,6 +266,7 @@ Options:
 - `flushIntervalMs` (default `5000`, must be a finite number `> 0` when `apiKey` is set)
 - `maxRetries` (default `3`, must be a non-negative integer)
 - `defaultEventType` (default `ai_request`)
+- `budgetFailClosed` (default `false`; when `true`, blocks `guardedCall` if budget state cannot be refreshed)
 - `debug` (default `false`)
 - `onError` (optional callback)
 
@@ -297,6 +325,7 @@ Request/response content is not sent.
 This SDK follows semantic versioning.
 
 - npm package: `ai-cost-calc`
+- changelog: [CHANGELOG.md](./CHANGELOG.md)
 - check release history on npm/GitHub before major upgrades
 
 ## License

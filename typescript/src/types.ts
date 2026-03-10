@@ -7,6 +7,12 @@ export interface EventPayload {
   occurredAt?: string;
 }
 
+/** Context passed to `AiCostCalc.guardedCall()`. */
+export interface GuardedCallContext {
+  customerId: string;
+  eventType?: string;
+}
+
 /** Usage data from a single AI API call. */
 export interface UsageData {
   model: string;
@@ -39,6 +45,7 @@ export interface AiCostCalcConfig {
   flushIntervalMs?: number;
   maxRetries?: number;
   defaultEventType?: string;
+  budgetFailClosed?: boolean;
   onError?: (error: AiCostCalcError) => void;
   debug?: boolean;
 }
